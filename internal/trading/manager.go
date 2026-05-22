@@ -12,15 +12,37 @@ import (
 
 type Manager struct {
 	broker Broker
+	store  Store
 	mu     sync.RWMutex
 	trades map[string]*ManagedTrade
 }
 
 func NewManager(broker Broker) *Manager {
-	return &Manager{
+	manager, _ := NewManagerWithStore(broker, nil)
+	return manager
+}
+
+func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
+	manager := &Manager{
 		broker: broker,
+		store:  store,
 		trades: make(map[string]*ManagedTrade),
 	}
+	if store == nil {
+		return manager, nil
+	}
+
+	trades, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+	for _, trade := range trades {
+		if trade == nil || trade.ID == "" {
+			continue
+		}
+		manager.trades[trade.ID] = cloneTrade(trade)
+	}
+	return manager, nil
 }
 
 type CreateTradeRequest struct {
@@ -32,6 +54,16 @@ type CreateTradeRequest struct {
 	OrderType        string  `json:"order_type"`
 	Price            float64 `json:"price,omitempty"`
 	MarketProtection *int    `json:"market_protection,omitempty"`
+}
+
+type ImportTradeRequest struct {
+	ID            string `json:"id,omitempty"`
+	Exchange      string `json:"exchange"`
+	TradingSymbol string `json:"tradingsymbol"`
+	Side          string `json:"side"`
+	Quantity      int    `json:"quantity"`
+	Product       string `json:"product"`
+	EntryOrderID  string `json:"entry_order_id"`
 }
 
 func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTrade, error) {
@@ -73,8 +105,66 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	}
 
 	m.mu.Lock()
+	if existing, ok := m.trades[trade.ID]; ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("trade id already exists: %s", existing.ID)
+	}
+	if existing := m.findByEntryOrderIDLocked(trade.EntryOrderID); existing != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("entry_order_id already exists on trade %s", existing.ID)
+	}
 	m.trades[trade.ID] = trade
 	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+
+	return cloneTrade(trade), nil
+}
+
+func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
+	side := strings.ToUpper(req.Side)
+	if side != "BUY" && side != "SELL" {
+		return nil, errors.New("side must be BUY or SELL")
+	}
+	if req.Quantity <= 0 {
+		return nil, errors.New("quantity must be positive")
+	}
+	if req.EntryOrderID == "" {
+		return nil, errors.New("entry_order_id is required")
+	}
+
+	now := time.Now().UTC()
+	id := req.ID
+	if id == "" {
+		id = fmt.Sprintf("%s-%d", strings.ToLower(req.TradingSymbol), now.UnixNano())
+	}
+	trade := &ManagedTrade{
+		ID:            id,
+		Exchange:      req.Exchange,
+		TradingSymbol: req.TradingSymbol,
+		Side:          side,
+		Quantity:      req.Quantity,
+		Product:       valueOr(req.Product, "MIS"),
+		EntryOrderID:  req.EntryOrderID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.trades[trade.ID]; ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("trade id already exists: %s", existing.ID)
+	}
+	if existing := m.findByEntryOrderIDLocked(trade.EntryOrderID); existing != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("entry_order_id already exists on trade %s", existing.ID)
+	}
+	m.trades[trade.ID] = trade
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
 
 	return cloneTrade(trade), nil
 }
@@ -116,7 +206,6 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	current := m.trades[id]
 	current.StopOrderID = orderID
 	current.StopLoss = &StopLoss{
@@ -125,7 +214,12 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 		TrailBy:      req.TrailBy,
 	}
 	current.UpdatedAt = time.Now().UTC()
-	return cloneTrade(current), nil
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 type TargetRequest struct {
@@ -158,12 +252,16 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	current := m.trades[id]
 	current.TargetOrderID = orderID
 	current.Target = &Target{Price: req.Price}
 	current.UpdatedAt = time.Now().UTC()
-	return cloneTrade(current), nil
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade, error) {
@@ -178,12 +276,16 @@ func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade,
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	current := m.trades[id]
 	current.StopOrderID = ""
 	current.StopLoss = nil
 	current.UpdatedAt = time.Now().UTC()
-	return cloneTrade(current), nil
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, error) {
@@ -198,12 +300,16 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	current := m.trades[id]
 	current.TargetOrderID = ""
 	current.Target = nil
 	current.UpdatedAt = time.Now().UTC()
-	return cloneTrade(current), nil
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
@@ -239,7 +345,6 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	current := m.trades[id]
 	current.ExitOrderID = exitOrderID
 	current.StopOrderID = ""
@@ -247,7 +352,12 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	current.StopLoss = nil
 	current.Target = nil
 	current.UpdatedAt = time.Now().UTC()
-	return cloneTrade(current), nil
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (m *Manager) List() []*ManagedTrade {
@@ -311,6 +421,7 @@ func (m *Manager) trailOnce(ctx context.Context) {
 		}
 		current.UpdatedAt = time.Now().UTC()
 		m.mu.Unlock()
+		_ = m.persist()
 	}
 }
 
@@ -341,6 +452,22 @@ func (m *Manager) get(id string) (*ManagedTrade, error) {
 		return nil, errors.New("trade not found")
 	}
 	return cloneTrade(trade), nil
+}
+
+func (m *Manager) persist() error {
+	if m.store == nil {
+		return nil
+	}
+	return m.store.Save(m.List())
+}
+
+func (m *Manager) findByEntryOrderIDLocked(entryOrderID string) *ManagedTrade {
+	for _, trade := range m.trades {
+		if trade.EntryOrderID == entryOrderID {
+			return trade
+		}
+	}
+	return nil
 }
 
 func cloneTrade(trade *ManagedTrade) *ManagedTrade {

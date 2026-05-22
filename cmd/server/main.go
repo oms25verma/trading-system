@@ -30,7 +30,10 @@ func main() {
 		log.Println("broker=paper")
 	}
 
-	manager := trading.NewManager(broker)
+	manager, err := trading.NewManagerWithStore(broker, trading.NewJSONStore(cfg.TradeStorePath))
+	if err != nil {
+		log.Fatal(err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go manager.TrailStops(ctx, cfg.PollInterval)
@@ -98,6 +101,14 @@ func routes(manager *trading.Manager, kiteClient *kite.Client) http.Handler {
 			return
 		}
 		trade, err := manager.Enter(r.Context(), req)
+		writeResult(w, trade, err)
+	})
+	mux.HandleFunc("POST /trades/import", func(w http.ResponseWriter, r *http.Request) {
+		var req trading.ImportTradeRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		trade, err := manager.Import(req)
 		writeResult(w, trade, err)
 	})
 	mux.HandleFunc("POST /trades/{id}/stop-loss", func(w http.ResponseWriter, r *http.Request) {

@@ -21,6 +21,12 @@ The server starts on `:8080` and uses the paper broker by default.
 curl http://localhost:8080/healthz
 ```
 
+Trades are persisted to `data/trades.json` by default, so local trade ids survive server restarts. Override the location with:
+
+```bash
+export TRADE_STORE_PATH=/path/to/trades.json
+```
+
 ## Create a trade
 
 ```bash
@@ -40,6 +46,26 @@ curl -X POST http://localhost:8080/trades \
 `market_protection` is required by Kite for `MARKET` and `SL-M` orders. Use `-1` for automatic protection, or use a percentage such as `2` for 2%.
 
 Use the returned `id` in the next calls.
+
+Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit APIs.
+
+## Import an existing trade
+
+Use this after a server restart if the trade was created before persistence was enabled. This does not place a new entry order; it only stores the local trade record.
+
+```bash
+curl -X POST http://localhost:8080/trades/import \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "silverm26junfut-1779465072440087000",
+    "exchange": "MCX",
+    "tradingsymbol": "SILVERM26JUNFUT",
+    "side": "SELL",
+    "quantity": 1,
+    "product": "MIS",
+    "entry_order_id": "2057851784202215424"
+  }'
+```
 
 ## Add a stop-loss with trailing
 
