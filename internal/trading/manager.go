@@ -46,14 +46,23 @@ func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
 }
 
 type CreateTradeRequest struct {
-	Exchange         string  `json:"exchange"`
-	TradingSymbol    string  `json:"tradingsymbol"`
-	Side             string  `json:"side"`
-	Quantity         int     `json:"quantity"`
-	Product          string  `json:"product"`
-	OrderType        string  `json:"order_type"`
-	Price            float64 `json:"price,omitempty"`
-	MarketProtection *int    `json:"market_protection,omitempty"`
+	Exchange         string                 `json:"exchange"`
+	TradingSymbol    string                 `json:"tradingsymbol"`
+	Side             string                 `json:"side"`
+	Quantity         int                    `json:"quantity"`
+	Product          string                 `json:"product"`
+	OrderType        string                 `json:"order_type"`
+	Price            float64                `json:"price,omitempty"`
+	MarketProtection *int                   `json:"market_protection,omitempty"`
+	Protection       *AutoProtectionRequest `json:"protection,omitempty"`
+}
+
+type AutoProtectionRequest struct {
+	ReferencePrice float64 `json:"reference_price,omitempty"`
+	StopLossPoints float64 `json:"stop_loss_points,omitempty"`
+	TargetPoints   float64 `json:"target_points,omitempty"`
+	TrailBy        float64 `json:"trail_by,omitempty"`
+	SLLimitOffset  float64 `json:"sl_limit_offset,omitempty"`
 }
 
 type ImportTradeRequest struct {
@@ -117,6 +126,10 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	m.mu.Unlock()
 	if err := m.persist(); err != nil {
 		return nil, err
+	}
+
+	if req.Protection != nil {
+		return m.applyAutoProtection(ctx, trade.ID, req.Price, *req.Protection)
 	}
 
 	return cloneTrade(trade), nil
@@ -262,6 +275,60 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 		return nil, err
 	}
 	return result, nil
+}
+
+func (m *Manager) applyAutoProtection(ctx context.Context, id string, orderPrice float64, req AutoProtectionRequest) (*ManagedTrade, error) {
+	if req.StopLossPoints <= 0 && req.TargetPoints <= 0 {
+		return m.get(id)
+	}
+
+	trade, err := m.get(id)
+	if err != nil {
+		return nil, err
+	}
+
+	referencePrice, err := m.referencePrice(ctx, trade, orderPrice, req.ReferencePrice)
+	if err != nil {
+		return nil, err
+	}
+
+	current := trade
+	if req.StopLossPoints > 0 {
+		triggerPrice, limitPrice := stopPrices(trade.Side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
+		current, err = m.AddStopLoss(ctx, id, StopLossRequest{
+			TriggerPrice: triggerPrice,
+			LimitPrice:   limitPrice,
+			TrailBy:      req.TrailBy,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if req.TargetPoints > 0 {
+		current, err = m.AddTarget(ctx, id, TargetRequest{
+			Price: targetPrice(trade.Side, referencePrice, req.TargetPoints),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return current, nil
+}
+
+func (m *Manager) referencePrice(ctx context.Context, trade *ManagedTrade, orderPrice, requestedReference float64) (float64, error) {
+	if requestedReference > 0 {
+		return requestedReference, nil
+	}
+	if orderPrice > 0 {
+		return orderPrice, nil
+	}
+	ltp, err := m.broker.LTP(ctx, trade.Exchange, trade.TradingSymbol)
+	if err != nil {
+		return 0, fmt.Errorf("reference_price is required when LTP cannot be fetched: %w", err)
+	}
+	return ltp, nil
 }
 
 func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade, error) {
@@ -498,6 +565,26 @@ func validateStopLimit(exitSide string, triggerPrice, limitPrice float64) error 
 		return errors.New("for SELL stop-loss orders, limit_price must be equal to or less than trigger_price")
 	}
 	return nil
+}
+
+func stopPrices(side string, referencePrice, points, limitOffset float64) (float64, float64) {
+	if limitOffset <= 0 {
+		limitOffset = 0.05
+	}
+	if side == "BUY" {
+		triggerPrice := referencePrice - points
+		return triggerPrice, triggerPrice - limitOffset
+	}
+
+	triggerPrice := referencePrice + points
+	return triggerPrice, triggerPrice + limitOffset
+}
+
+func targetPrice(side string, referencePrice, points float64) float64 {
+	if side == "BUY" {
+		return referencePrice + points
+	}
+	return referencePrice - points
 }
 
 func money(value float64) string {

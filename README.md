@@ -49,6 +49,41 @@ Use the returned `id` in the next calls.
 
 Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit APIs.
 
+## Create a trade with automatic SL and target
+
+Add a `protection` block to place stop-loss and target orders immediately after the entry order.
+
+```bash
+curl -X POST http://localhost:8080/trades \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "exchange": "MCX",
+    "tradingsymbol": "SILVERM26JUNFUT",
+    "side": "SELL",
+    "quantity": 1,
+    "product": "MIS",
+    "order_type": "MARKET",
+    "market_protection": -1,
+    "protection": {
+      "reference_price": 109000,
+      "stop_loss_points": 20,
+      "target_points": 40,
+      "trail_by": 10,
+      "sl_limit_offset": 5
+    }
+  }'
+```
+
+For a `SELL` trade at `109000`, this creates:
+
+```text
+stop-loss trigger = 109020
+stop-loss limit   = 109025
+target            = 108960
+```
+
+For a `BUY` trade, the same points are applied in the opposite direction. For `MARKET` orders, pass `reference_price` if you want deterministic SL/target prices; otherwise the service tries to use LTP.
+
 ## Import an existing trade
 
 Use this after a server restart if the trade was created before persistence was enabled. This does not place a new entry order; it only stores the local trade record.
