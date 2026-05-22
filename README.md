@@ -49,6 +49,13 @@ Use the returned `id` in the next calls.
 
 Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit APIs.
 
+When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
+
+```text
+BUY trade  -> stop-loss below entry, target above entry
+SELL trade -> stop-loss above entry, target below entry
+```
+
 ## Create a trade with automatic SL and target
 
 Add a `protection` block to place stop-loss and target orders immediately after the entry order.
@@ -98,6 +105,7 @@ curl -X POST http://localhost:8080/trades/import \
     "side": "SELL",
     "quantity": 1,
     "product": "MIS",
+    "entry_price": 109000,
     "entry_order_id": "2057851784202215424"
   }'
 ```

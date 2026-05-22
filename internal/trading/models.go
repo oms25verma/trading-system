@@ -33,6 +33,7 @@ type ManagedTrade struct {
 	Side          string    `json:"side"`
 	Quantity      int       `json:"quantity"`
 	Product       string    `json:"product"`
+	EntryPrice    float64   `json:"entry_price,omitempty"`
 	EntryOrderID  string    `json:"entry_order_id"`
 	ExitOrderID   string    `json:"exit_order_id,omitempty"`
 	StopOrderID   string    `json:"stop_order_id,omitempty"`
