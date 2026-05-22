@@ -89,6 +89,10 @@ type OrderResponse struct {
 	OrderID string `json:"order_id"`
 }
 
+type OrderStatusResponse struct {
+	Status string `json:"status"`
+}
+
 func (c *Client) PlaceOrder(ctx context.Context, order OrderRequest) (string, error) {
 	variety := valueOr(order.Variety, "regular")
 	form := url.Values{}
@@ -124,6 +128,19 @@ func (c *Client) ModifyOrder(ctx context.Context, variety, orderID string, field
 
 func (c *Client) CancelOrder(ctx context.Context, variety, orderID string) error {
 	return c.doForm(ctx, http.MethodDelete, "/orders/"+valueOr(variety, "regular")+"/"+orderID, nil, nil)
+}
+
+func (c *Client) OrderStatus(ctx context.Context, orderID string) (string, error) {
+	var out struct {
+		Data []OrderStatusResponse `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/orders/"+orderID, nil, &out); err != nil {
+		return "", err
+	}
+	if len(out.Data) == 0 {
+		return "", fmt.Errorf("order history not found for %s", orderID)
+	}
+	return out.Data[len(out.Data)-1].Status, nil
 }
 
 func (c *Client) LTP(ctx context.Context, exchange, symbol string) (float64, error) {

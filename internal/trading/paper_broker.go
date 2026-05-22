@@ -13,12 +13,14 @@ type PaperBroker struct {
 	nextID int
 	ltp    map[string]float64
 	orders map[string]Order
+	status map[string]string
 }
 
 func NewPaperBroker() *PaperBroker {
 	return &PaperBroker{
 		ltp:    make(map[string]float64),
 		orders: make(map[string]Order),
+		status: make(map[string]string),
 	}
 }
 
@@ -29,6 +31,11 @@ func (p *PaperBroker) PlaceOrder(_ context.Context, order Order) (string, error)
 	p.nextID++
 	id := "paper-" + strconv.Itoa(p.nextID)
 	p.orders[id] = order
+	if order.OrderType == "MARKET" {
+		p.status[id] = "COMPLETE"
+	} else {
+		p.status[id] = "OPEN"
+	}
 	if order.Price > 0 {
 		p.ltp[key(order.Exchange, order.TradingSymbol)] = order.Price
 	}
@@ -54,6 +61,17 @@ func (p *PaperBroker) ModifyOrder(_ context.Context, _ string, orderID string, f
 	}
 	p.orders[orderID] = order
 	return nil
+}
+
+func (p *PaperBroker) OrderStatus(_ context.Context, _ string, orderID string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	status, ok := p.status[orderID]
+	if !ok {
+		return "", fmt.Errorf("paper order %s not found", orderID)
+	}
+	return status, nil
 }
 
 func (p *PaperBroker) CancelOrder(_ context.Context, _ string, orderID string) error {

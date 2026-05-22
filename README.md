@@ -58,7 +58,7 @@ SELL trade -> stop-loss above entry, target below entry
 
 ## Create a trade with automatic SL and target
 
-Add a `protection` block to place stop-loss and target orders immediately after the entry order.
+Add a `protection` block to place stop-loss and target orders for the entry.
 
 ```bash
 curl -X POST http://localhost:8080/trades \
@@ -91,6 +91,8 @@ target            = 108960
 
 For a `BUY` trade, the same points are applied in the opposite direction. For `MARKET` orders, pass `reference_price` if you want deterministic SL/target prices; otherwise the service tries to use LTP.
 
+For `LIMIT` entry orders, protection is saved as `pending_protection` and is not sent to Kite immediately. The background poller checks the entry order status every `POLL_SECONDS`; once the entry is `COMPLETE`, it creates the stop-loss and target orders.
+
 ## Import an existing trade
 
 Use this after a server restart if the trade was created before persistence was enabled. This does not place a new entry order; it only stores the local trade record.
@@ -110,7 +112,7 @@ curl -X POST http://localhost:8080/trades/import \
   }'
 ```
 
-## Add a stop-loss with trailing
+## Set a stop-loss with trailing
 
 ```bash
 curl -X POST http://localhost:8080/trades/<id>/stop-loss \
@@ -122,15 +124,17 @@ curl -X POST http://localhost:8080/trades/<id>/stop-loss \
   }'
 ```
 
-The service polls LTP every `POLL_SECONDS` and modifies the SL order when the price moves in your favor.
+If no stop-loss exists, this creates one. If a stop-loss already exists, this modifies the existing Kite order. The service polls LTP every `POLL_SECONDS` and modifies the SL order when the price moves in your favor.
 
-## Add a target
+## Set a target
 
 ```bash
 curl -X POST http://localhost:8080/trades/<id>/target \
   -H 'Content-Type: application/json' \
   -d '{"price": 1520}'
 ```
+
+If no target exists, this creates one. If a target already exists, this modifies the existing Kite order.
 
 ## Remove stop-loss or target
 

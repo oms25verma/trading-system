@@ -38,6 +38,10 @@ func (a *Adapter) CancelOrder(ctx context.Context, variety, orderID string) erro
 	return a.client.CancelOrder(ctx, variety, orderID)
 }
 
+func (a *Adapter) OrderStatus(ctx context.Context, _ string, orderID string) (string, error) {
+	return a.client.OrderStatus(ctx, orderID)
+}
+
 func (a *Adapter) LTP(ctx context.Context, exchange, symbol string) (float64, error) {
 	return a.client.LTP(ctx, exchange, symbol)
 }

@@ -116,8 +116,12 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		Product:       valueOr(req.Product, "MIS"),
 		EntryPrice:    initialEntryPrice(req),
 		EntryOrderID:  orderID,
+		EntryStatus:   initialEntryStatus(req),
 		CreatedAt:     now,
 		UpdatedAt:     now,
+	}
+	if req.Protection != nil && shouldDeferProtection(req) {
+		trade.PendingProtection = pendingProtection(*req.Protection)
 	}
 
 	m.mu.Lock()
@@ -135,7 +139,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		return nil, err
 	}
 
-	if req.Protection != nil {
+	if req.Protection != nil && !shouldDeferProtection(req) {
 		return m.applyAutoProtection(ctx, trade.ID, req.Price, *req.Protection)
 	}
 
@@ -168,6 +172,7 @@ func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
 		Product:       valueOr(req.Product, "MIS"),
 		EntryPrice:    req.EntryPrice,
 		EntryOrderID:  req.EntryOrderID,
+		EntryStatus:   "COMPLETE",
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -213,20 +218,32 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	if err := validateStopLimit(exitSide, req.TriggerPrice, req.LimitPrice); err != nil {
 		return nil, err
 	}
-	orderID, err := m.broker.PlaceOrder(ctx, Order{
-		Exchange:        trade.Exchange,
-		TradingSymbol:   trade.TradingSymbol,
-		TransactionType: exitSide,
-		Quantity:        trade.Quantity,
-		Product:         trade.Product,
-		OrderType:       "SL",
-		Variety:         "regular",
-		Validity:        "DAY",
-		Price:           req.LimitPrice,
-		TriggerPrice:    req.TriggerPrice,
-	})
-	if err != nil {
-		return nil, err
+	orderID := trade.StopOrderID
+	if orderID == "" {
+		orderID, err = m.broker.PlaceOrder(ctx, Order{
+			Exchange:        trade.Exchange,
+			TradingSymbol:   trade.TradingSymbol,
+			TransactionType: exitSide,
+			Quantity:        trade.Quantity,
+			Product:         trade.Product,
+			OrderType:       "SL",
+			Variety:         "regular",
+			Validity:        "DAY",
+			Price:           req.LimitPrice,
+			TriggerPrice:    req.TriggerPrice,
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = m.broker.ModifyOrder(ctx, "regular", orderID, map[string]string{
+			"order_type":    "SL",
+			"trigger_price": money(req.TriggerPrice),
+			"price":         money(req.LimitPrice),
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	m.mu.Lock()
@@ -263,19 +280,30 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 		return nil, err
 	}
 
-	orderID, err := m.broker.PlaceOrder(ctx, Order{
-		Exchange:        trade.Exchange,
-		TradingSymbol:   trade.TradingSymbol,
-		TransactionType: opposite(trade.Side),
-		Quantity:        trade.Quantity,
-		Product:         trade.Product,
-		OrderType:       "LIMIT",
-		Variety:         "regular",
-		Validity:        "DAY",
-		Price:           req.Price,
-	})
-	if err != nil {
-		return nil, err
+	orderID := trade.TargetOrderID
+	if orderID == "" {
+		orderID, err = m.broker.PlaceOrder(ctx, Order{
+			Exchange:        trade.Exchange,
+			TradingSymbol:   trade.TradingSymbol,
+			TransactionType: opposite(trade.Side),
+			Quantity:        trade.Quantity,
+			Product:         trade.Product,
+			OrderType:       "LIMIT",
+			Variety:         "regular",
+			Validity:        "DAY",
+			Price:           req.Price,
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = m.broker.ModifyOrder(ctx, "regular", orderID, map[string]string{
+			"order_type": "LIMIT",
+			"price":      money(req.Price),
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	m.mu.Lock()
@@ -472,6 +500,8 @@ func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
 
 func (m *Manager) trailOnce(ctx context.Context) {
 	for _, trade := range m.List() {
+		m.tryApplyPendingProtection(ctx, trade)
+
 		if trade.StopLoss == nil || trade.StopLoss.TrailBy <= 0 || trade.StopOrderID == "" {
 			continue
 		}
@@ -508,6 +538,33 @@ func (m *Manager) trailOnce(ctx context.Context) {
 		m.mu.Unlock()
 		_ = m.persist()
 	}
+}
+
+func (m *Manager) tryApplyPendingProtection(ctx context.Context, trade *ManagedTrade) {
+	if trade.PendingProtection == nil || trade.EntryOrderID == "" {
+		return
+	}
+
+	status, err := m.broker.OrderStatus(ctx, "regular", trade.EntryOrderID)
+	if err != nil || !strings.EqualFold(status, "COMPLETE") {
+		if status != "" {
+			_ = m.updateEntryStatus(trade.ID, status)
+		}
+		return
+	}
+	_ = m.updateEntryStatus(trade.ID, "COMPLETE")
+
+	protection := AutoProtectionRequest{
+		ReferencePrice: trade.PendingProtection.ReferencePrice,
+		StopLossPoints: trade.PendingProtection.StopLossPoints,
+		TargetPoints:   trade.PendingProtection.TargetPoints,
+		TrailBy:        trade.PendingProtection.TrailBy,
+		SLLimitOffset:  trade.PendingProtection.SLLimitOffset,
+	}
+	if _, err := m.applyAutoProtection(ctx, trade.ID, trade.EntryPrice, protection); err != nil {
+		return
+	}
+	_ = m.clearPendingProtection(trade.ID)
 }
 
 func nextTrailingStop(trade *ManagedTrade, ltp float64) (float64, float64, bool) {
@@ -565,6 +622,40 @@ func (m *Manager) setEntryPriceIfMissing(id string, entryPrice float64) error {
 	return m.persist()
 }
 
+func (m *Manager) updateEntryStatus(id string, status string) error {
+	if status == "" {
+		return nil
+	}
+
+	m.mu.Lock()
+	trade, ok := m.trades[id]
+	if !ok {
+		m.mu.Unlock()
+		return errors.New("trade not found")
+	}
+	if trade.EntryStatus == status {
+		m.mu.Unlock()
+		return nil
+	}
+	trade.EntryStatus = status
+	trade.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+	return m.persist()
+}
+
+func (m *Manager) clearPendingProtection(id string) error {
+	m.mu.Lock()
+	trade, ok := m.trades[id]
+	if !ok {
+		m.mu.Unlock()
+		return errors.New("trade not found")
+	}
+	trade.PendingProtection = nil
+	trade.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+	return m.persist()
+}
+
 func (m *Manager) findByEntryOrderIDLocked(entryOrderID string) *ManagedTrade {
 	for _, trade := range m.trades {
 		if trade.EntryOrderID == entryOrderID {
@@ -583,6 +674,10 @@ func cloneTrade(trade *ManagedTrade) *ManagedTrade {
 	if trade.Target != nil {
 		target := *trade.Target
 		copy.Target = &target
+	}
+	if trade.PendingProtection != nil {
+		protection := *trade.PendingProtection
+		copy.PendingProtection = &protection
 	}
 	return &copy
 }
@@ -668,6 +763,27 @@ func initialEntryPrice(req CreateTradeRequest) float64 {
 		return req.Protection.ReferencePrice
 	}
 	return req.Price
+}
+
+func initialEntryStatus(req CreateTradeRequest) string {
+	if strings.EqualFold(valueOr(req.OrderType, "MARKET"), "MARKET") {
+		return "COMPLETE"
+	}
+	return "OPEN"
+}
+
+func shouldDeferProtection(req CreateTradeRequest) bool {
+	return !strings.EqualFold(valueOr(req.OrderType, "MARKET"), "MARKET")
+}
+
+func pendingProtection(req AutoProtectionRequest) *PendingProtection {
+	return &PendingProtection{
+		ReferencePrice: req.ReferencePrice,
+		StopLossPoints: req.StopLossPoints,
+		TargetPoints:   req.TargetPoints,
+		TrailBy:        req.TrailBy,
+		SLLimitOffset:  req.SLLimitOffset,
+	}
 }
 
 func stopPrices(side string, referencePrice, points, limitOffset float64) (float64, float64) {
