@@ -91,6 +91,15 @@ target            = 108960
 
 For a `BUY` trade, the same points are applied in the opposite direction. For `MARKET` orders, pass `reference_price` if you want deterministic SL/target prices; otherwise the service tries to use LTP.
 
+If `sl_limit_offset` is omitted, defaults are currently:
+
+```text
+MCX commodities: 10.0
+Other exchanges: 0.05
+```
+
+These constants live in `internal/trading/constants.go` and can later move into production config.
+
 For `LIMIT` entry orders, protection is saved as `pending_protection` and is not sent to Kite immediately. The background poller checks the entry order status every `POLL_SECONDS`; once the entry is `COMPLETE`, it creates the stop-loss and target orders.
 
 ## Import an existing trade
@@ -142,6 +151,8 @@ If no target exists, this creates one. If a target already exists, this modifies
 curl -X DELETE http://localhost:8080/trades/<id>/stop-loss
 curl -X DELETE http://localhost:8080/trades/<id>/target
 ```
+
+These APIs cancel the existing Kite SL/target order and clear the local saved state.
 
 ## Exit a trade
 

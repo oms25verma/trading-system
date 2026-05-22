@@ -14,6 +14,7 @@ type fakeBroker struct {
 	status      map[string]string
 	placeCount  int
 	modifyCount int
+	cancelCount int
 	ltp         float64
 }
 
@@ -58,6 +59,7 @@ func (f *fakeBroker) ModifyOrder(_ context.Context, _ string, orderID string, fi
 }
 
 func (f *fakeBroker) CancelOrder(_ context.Context, _ string, orderID string) error {
+	f.cancelCount++
 	delete(f.orders, orderID)
 	delete(f.status, orderID)
 	return nil
@@ -155,7 +157,7 @@ func TestEnterWithStopLossUsesDefaultLimitOffset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if trade.StopLoss == nil || trade.StopLoss.TriggerPrice != 109020 || trade.StopLoss.LimitPrice != 109020.05 {
+	if trade.StopLoss == nil || trade.StopLoss.TriggerPrice != 109020 || trade.StopLoss.LimitPrice != 109030 {
 		t.Fatalf("unexpected stop-loss %+v", trade.StopLoss)
 	}
 }
@@ -311,6 +313,72 @@ func TestSetTargetModifiesExistingOrder(t *testing.T) {
 	}
 	if trade.Target.Price != 125 {
 		t.Fatalf("unexpected target %+v", trade.Target)
+	}
+}
+
+func TestRemoveStopLossCancelsExistingOrder(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "MCX",
+		TradingSymbol: "SILVERM26JUNFUT",
+		Side:          "SELL",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 120, LimitPrice: 125})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.RemoveStopLoss(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID != "" || trade.StopLoss != nil {
+		t.Fatalf("expected stop-loss cleared, got %+v", trade)
+	}
+	if broker.cancelCount != 1 {
+		t.Fatalf("expected one cancel, got %d", broker.cancelCount)
+	}
+}
+
+func TestRemoveTargetCancelsExistingOrder(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.RemoveTarget(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TargetOrderID != "" || trade.Target != nil {
+		t.Fatalf("expected target cleared, got %+v", trade)
+	}
+	if broker.cancelCount != 1 {
+		t.Fatalf("expected one cancel, got %d", broker.cancelCount)
 	}
 }
 

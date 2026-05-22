@@ -85,7 +85,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		return nil, errors.New("quantity must be positive")
 	}
 	if req.Protection != nil {
-		if err := validateAutoProtectionRequest(side, req.Price, *req.Protection); err != nil {
+		if err := validateAutoProtectionRequest(req.Exchange, side, req.Price, *req.Protection); err != nil {
 			return nil, err
 		}
 	}
@@ -340,7 +340,7 @@ func (m *Manager) applyAutoProtection(ctx context.Context, id string, orderPrice
 
 	current := trade
 	if req.StopLossPoints > 0 {
-		triggerPrice, limitPrice := stopPrices(trade.Side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
+		triggerPrice, limitPrice := stopPrices(trade.Exchange, trade.Side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
 		current, err = m.AddStopLoss(ctx, id, StopLossRequest{
 			TriggerPrice: triggerPrice,
 			LimitPrice:   limitPrice,
@@ -575,7 +575,7 @@ func nextTrailingStop(trade *ManagedTrade, ltp float64) (float64, float64, bool)
 		if candidate <= sl.TriggerPrice {
 			return 0, 0, false
 		}
-		return candidate, candidate - 0.05, true
+		return candidate, candidate - defaultSLLimitOffset(trade.Exchange), true
 	}
 
 	reference := minNonZero(sl.LowestLTP, ltp)
@@ -583,7 +583,7 @@ func nextTrailingStop(trade *ManagedTrade, ltp float64) (float64, float64, bool)
 	if candidate >= sl.TriggerPrice {
 		return 0, 0, false
 	}
-	return candidate, candidate + 0.05, true
+	return candidate, candidate + defaultSLLimitOffset(trade.Exchange), true
 }
 
 func (m *Manager) get(id string) (*ManagedTrade, error) {
@@ -725,7 +725,7 @@ func validateTargetAgainstEntry(trade *ManagedTrade, targetPrice float64) error 
 	return nil
 }
 
-func validateAutoProtectionRequest(side string, orderPrice float64, req AutoProtectionRequest) error {
+func validateAutoProtectionRequest(exchange, side string, orderPrice float64, req AutoProtectionRequest) error {
 	if req.StopLossPoints < 0 {
 		return errors.New("stop_loss_points cannot be negative")
 	}
@@ -747,7 +747,7 @@ func validateAutoProtectionRequest(side string, orderPrice float64, req AutoProt
 		return nil
 	}
 	if req.StopLossPoints > 0 {
-		triggerPrice, limitPrice := stopPrices(side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
+		triggerPrice, limitPrice := stopPrices(exchange, side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
 		if triggerPrice <= 0 || limitPrice <= 0 {
 			return errors.New("computed stop-loss trigger_price and limit_price must be positive")
 		}
@@ -786,9 +786,9 @@ func pendingProtection(req AutoProtectionRequest) *PendingProtection {
 	}
 }
 
-func stopPrices(side string, referencePrice, points, limitOffset float64) (float64, float64) {
+func stopPrices(exchange, side string, referencePrice, points, limitOffset float64) (float64, float64) {
 	if limitOffset <= 0 {
-		limitOffset = 0.05
+		limitOffset = defaultSLLimitOffset(exchange)
 	}
 	if side == "BUY" {
 		triggerPrice := referencePrice - points
