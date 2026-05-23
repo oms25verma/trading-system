@@ -43,6 +43,8 @@ type ManagedTrade struct {
 	StopLoss          *StopLoss          `json:"stop_loss,omitempty"`
 	Target            *Target            `json:"target,omitempty"`
 	PendingProtection *PendingProtection `json:"pending_protection,omitempty"`
+	PendingStopLoss   *StopLoss          `json:"pending_stop_loss,omitempty"`
+	PendingTarget     *Target            `json:"pending_target,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
 }

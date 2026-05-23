@@ -135,6 +135,8 @@ curl -X POST http://localhost:8080/trades/<id>/stop-loss \
 
 If no stop-loss exists, this creates one. If a stop-loss already exists, this modifies the existing Kite order. The service polls LTP every `POLL_SECONDS` and modifies the SL order when the price moves in your favor.
 
+For an open `LIMIT` entry, this saves `pending_stop_loss` locally and does not send the SL order to Kite until the entry order is `COMPLETE`.
+
 ## Set a target
 
 ```bash
@@ -144,6 +146,8 @@ curl -X POST http://localhost:8080/trades/<id>/target \
 ```
 
 If no target exists, this creates one. If a target already exists, this modifies the existing Kite order.
+
+For an open `LIMIT` entry, this saves `pending_target` locally and does not send the target order to Kite until the entry order is `COMPLETE`.
 
 ## Remove stop-loss or target
 

@@ -240,6 +240,90 @@ func TestLimitEntryDefersProtectionUntilComplete(t *testing.T) {
 	}
 }
 
+func TestManualStopLossForOpenLimitEntryIsDeferred(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "LIMIT",
+		Price:         100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.PendingStopLoss == nil || trade.StopOrderID != "" || trade.StopLoss != nil {
+		t.Fatalf("expected pending stop-loss only, got %+v", trade)
+	}
+	if broker.placeCount != 1 {
+		t.Fatalf("expected no stop-loss broker order while entry open, got %d orders", broker.placeCount)
+	}
+
+	broker.status[trade.EntryOrderID] = "COMPLETE"
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.PendingStopLoss != nil {
+		t.Fatalf("expected pending stop-loss cleared, got %+v", trade.PendingStopLoss)
+	}
+	if trade.StopLoss == nil || trade.StopLoss.TriggerPrice != 90 || trade.StopOrderID == "" {
+		t.Fatalf("expected live stop-loss after completion, got %+v", trade)
+	}
+	if broker.placeCount != 2 {
+		t.Fatalf("expected entry + stop-loss orders, got %d", broker.placeCount)
+	}
+}
+
+func TestManualTargetForOpenLimitEntryIsDeferred(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "LIMIT",
+		Price:         100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.PendingTarget == nil || trade.TargetOrderID != "" || trade.Target != nil {
+		t.Fatalf("expected pending target only, got %+v", trade)
+	}
+	if broker.placeCount != 1 {
+		t.Fatalf("expected no target broker order while entry open, got %d orders", broker.placeCount)
+	}
+
+	broker.status[trade.EntryOrderID] = "COMPLETE"
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.PendingTarget != nil {
+		t.Fatalf("expected pending target cleared, got %+v", trade.PendingTarget)
+	}
+	if trade.Target == nil || trade.Target.Price != 120 || trade.TargetOrderID == "" {
+		t.Fatalf("expected live target after completion, got %+v", trade)
+	}
+	if broker.placeCount != 2 {
+		t.Fatalf("expected entry + target orders, got %d", broker.placeCount)
+	}
+}
+
 func TestSetStopLossModifiesExistingOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
