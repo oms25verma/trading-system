@@ -466,6 +466,90 @@ func TestRemoveTargetCancelsExistingOrder(t *testing.T) {
 	}
 }
 
+func TestRemovePendingStopLossForOpenLimitEntry(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "LIMIT",
+		Price:         100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.PendingStopLoss == nil {
+		t.Fatal("expected pending stop-loss")
+	}
+
+	trade, err = manager.RemoveStopLoss(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.PendingStopLoss != nil || trade.StopLoss != nil || trade.StopOrderID != "" {
+		t.Fatalf("expected stop-loss state cleared, got %+v", trade)
+	}
+	if broker.cancelCount != 0 {
+		t.Fatalf("expected no broker cancel for pending stop-loss, got %d", broker.cancelCount)
+	}
+
+	broker.status[trade.EntryOrderID] = "COMPLETE"
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.StopLoss != nil || trade.StopOrderID != "" {
+		t.Fatalf("expected removed pending stop-loss not to be created, got %+v", trade)
+	}
+}
+
+func TestRemovePendingTargetForOpenLimitEntry(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "LIMIT",
+		Price:         100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.PendingTarget == nil {
+		t.Fatal("expected pending target")
+	}
+
+	trade, err = manager.RemoveTarget(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.PendingTarget != nil || trade.Target != nil || trade.TargetOrderID != "" {
+		t.Fatalf("expected target state cleared, got %+v", trade)
+	}
+	if broker.cancelCount != 0 {
+		t.Fatalf("expected no broker cancel for pending target, got %d", broker.cancelCount)
+	}
+
+	broker.status[trade.EntryOrderID] = "COMPLETE"
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.Target != nil || trade.TargetOrderID != "" {
+		t.Fatalf("expected removed pending target not to be created, got %+v", trade)
+	}
+}
+
 func TestImportRejectsDuplicates(t *testing.T) {
 	manager := NewManager(newFakeBroker())
 	_, err := manager.Import(ImportTradeRequest{

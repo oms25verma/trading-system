@@ -400,6 +400,7 @@ func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade,
 	current := m.trades[id]
 	current.StopOrderID = ""
 	current.StopLoss = nil
+	current.PendingStopLoss = nil
 	current.UpdatedAt = time.Now().UTC()
 	result := cloneTrade(current)
 	m.mu.Unlock()
@@ -424,6 +425,7 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 	current := m.trades[id]
 	current.TargetOrderID = ""
 	current.Target = nil
+	current.PendingTarget = nil
 	current.UpdatedAt = time.Now().UTC()
 	result := cloneTrade(current)
 	m.mu.Unlock()

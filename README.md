@@ -158,6 +158,8 @@ curl -X DELETE http://localhost:8080/trades/<id>/target
 
 These APIs cancel the existing Kite SL/target order and clear the local saved state.
 
+For an open `LIMIT` entry, these APIs clear `pending_stop_loss` or `pending_target` locally. No Kite cancel call is made because no SL/target order has been sent yet.
+
 ## Exit a trade
 
 This cancels attached stop-loss and target orders, then places a market order in the opposite direction.
