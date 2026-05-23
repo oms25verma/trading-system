@@ -550,6 +550,162 @@ func TestRemovePendingTargetForOpenLimitEntry(t *testing.T) {
 	}
 }
 
+func TestOCOStopLossCompleteCancelsTargetAndClosesTrade(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.status[trade.StopOrderID] = OrderStatusComplete
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonStopLoss {
+		t.Fatalf("expected stop-loss close, got %+v", trade)
+	}
+	if trade.TargetOrderStatus != OrderStatusCancelled {
+		t.Fatalf("expected target cancelled, got %s", trade.TargetOrderStatus)
+	}
+	if broker.cancelCount != 1 {
+		t.Fatalf("expected one sibling cancel, got %d", broker.cancelCount)
+	}
+}
+
+func TestOCOTargetCompleteCancelsStopLossAndClosesTrade(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.status[trade.TargetOrderID] = OrderStatusComplete
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonTarget {
+		t.Fatalf("expected target close, got %+v", trade)
+	}
+	if trade.StopOrderStatus != OrderStatusCancelled {
+		t.Fatalf("expected stop-loss cancelled, got %s", trade.StopOrderStatus)
+	}
+	if broker.cancelCount != 1 {
+		t.Fatalf("expected one sibling cancel, got %d", broker.cancelCount)
+	}
+}
+
+func TestOCOBothCompleteRaceClosesAsAmbiguousWithoutCancel(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.status[trade.StopOrderID] = OrderStatusComplete
+	broker.status[trade.TargetOrderID] = OrderStatusComplete
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonBothCompleted {
+		t.Fatalf("expected ambiguous close, got %+v", trade)
+	}
+	if broker.cancelCount != 0 {
+		t.Fatalf("expected no cancel when both complete, got %d", broker.cancelCount)
+	}
+}
+
+func TestClosedTradeRejectsFurtherActions(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.status[trade.TargetOrderID] = OrderStatusComplete
+	manager.trailOnce(context.Background())
+
+	if _, err := manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 95, LimitPrice: 94}); err == nil {
+		t.Fatal("expected closed trade to reject stop-loss")
+	}
+	if _, err := manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 130}); err == nil {
+		t.Fatal("expected closed trade to reject target")
+	}
+	if _, err := manager.Exit(context.Background(), trade.ID); err == nil {
+		t.Fatal("expected closed trade to reject manual exit")
+	}
+}
+
 func TestImportRejectsDuplicates(t *testing.T) {
 	manager := NewManager(newFakeBroker())
 	_, err := manager.Import(ImportTradeRequest{

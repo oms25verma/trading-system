@@ -40,6 +40,9 @@ func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
 		if trade == nil || trade.ID == "" {
 			continue
 		}
+		if trade.TradeStatus == "" {
+			trade.TradeStatus = TradeStatusOpen
+		}
 		manager.trades[trade.ID] = cloneTrade(trade)
 	}
 	return manager, nil
@@ -117,6 +120,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		EntryPrice:    initialEntryPrice(req),
 		EntryOrderID:  orderID,
 		EntryStatus:   initialEntryStatus(req),
+		TradeStatus:   TradeStatusOpen,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -172,7 +176,8 @@ func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
 		Product:       valueOr(req.Product, "MIS"),
 		EntryPrice:    req.EntryPrice,
 		EntryOrderID:  req.EntryOrderID,
-		EntryStatus:   "COMPLETE",
+		EntryStatus:   OrderStatusComplete,
+		TradeStatus:   TradeStatusOpen,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -208,6 +213,9 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 
 	trade, err := m.get(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
 		return nil, err
 	}
 
@@ -252,6 +260,7 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	m.mu.Lock()
 	current := m.trades[id]
 	current.StopOrderID = orderID
+	current.StopOrderStatus = OrderStatusOpen
 	current.StopLoss = &StopLoss{
 		TriggerPrice: req.TriggerPrice,
 		LimitPrice:   req.LimitPrice,
@@ -278,6 +287,9 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 
 	trade, err := m.get(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
 		return nil, err
 	}
 	if err := validateTargetAgainstEntry(trade, req.Price); err != nil {
@@ -316,6 +328,7 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 	m.mu.Lock()
 	current := m.trades[id]
 	current.TargetOrderID = orderID
+	current.TargetOrderStatus = OrderStatusOpen
 	current.Target = &Target{Price: req.Price}
 	current.PendingTarget = nil
 	current.UpdatedAt = time.Now().UTC()
@@ -334,6 +347,9 @@ func (m *Manager) applyAutoProtection(ctx context.Context, id string, orderPrice
 
 	trade, err := m.get(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
 		return nil, err
 	}
 
@@ -399,6 +415,7 @@ func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade,
 	m.mu.Lock()
 	current := m.trades[id]
 	current.StopOrderID = ""
+	current.StopOrderStatus = ""
 	current.StopLoss = nil
 	current.PendingStopLoss = nil
 	current.UpdatedAt = time.Now().UTC()
@@ -415,6 +432,9 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureTradeOpen(trade); err != nil {
+		return nil, err
+	}
 	if trade.TargetOrderID != "" {
 		if err := m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID); err != nil {
 			return nil, err
@@ -424,6 +444,7 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 	m.mu.Lock()
 	current := m.trades[id]
 	current.TargetOrderID = ""
+	current.TargetOrderStatus = ""
 	current.Target = nil
 	current.PendingTarget = nil
 	current.UpdatedAt = time.Now().UTC()
@@ -438,6 +459,9 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	trade, err := m.get(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
 		return nil, err
 	}
 
@@ -470,10 +494,21 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	m.mu.Lock()
 	current := m.trades[id]
 	current.ExitOrderID = exitOrderID
-	current.StopOrderID = ""
-	current.TargetOrderID = ""
+	current.TradeStatus = TradeStatusClosed
+	current.ExitReason = ExitReasonManual
+	now := time.Now().UTC()
+	current.ClosedAt = &now
+	if current.StopOrderID != "" {
+		current.StopOrderStatus = OrderStatusCancelled
+	}
+	if current.TargetOrderID != "" {
+		current.TargetOrderStatus = OrderStatusCancelled
+	}
 	current.StopLoss = nil
 	current.Target = nil
+	current.PendingProtection = nil
+	current.PendingStopLoss = nil
+	current.PendingTarget = nil
 	current.UpdatedAt = time.Now().UTC()
 	result := cloneTrade(current)
 	m.mu.Unlock()
@@ -510,7 +545,15 @@ func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
 
 func (m *Manager) trailOnce(ctx context.Context) {
 	for _, trade := range m.List() {
+		if isTradeClosed(trade) {
+			continue
+		}
 		m.tryApplyPendingProtection(ctx, trade)
+		m.checkOCO(ctx, trade)
+		trade, err := m.get(trade.ID)
+		if err != nil || isTradeClosed(trade) {
+			continue
+		}
 
 		if trade.StopLoss == nil || trade.StopLoss.TrailBy <= 0 || trade.StopOrderID == "" {
 			continue
@@ -547,6 +590,47 @@ func (m *Manager) trailOnce(ctx context.Context) {
 		current.UpdatedAt = time.Now().UTC()
 		m.mu.Unlock()
 		_ = m.persist()
+	}
+}
+
+func (m *Manager) checkOCO(ctx context.Context, trade *ManagedTrade) {
+	if isTradeClosed(trade) || (trade.StopOrderID == "" && trade.TargetOrderID == "") {
+		return
+	}
+
+	stopStatus := trade.StopOrderStatus
+	if trade.StopOrderID != "" {
+		if status, err := m.broker.OrderStatus(ctx, "regular", trade.StopOrderID); err == nil && status != "" {
+			stopStatus = status
+		}
+	}
+	targetStatus := trade.TargetOrderStatus
+	if trade.TargetOrderID != "" {
+		if status, err := m.broker.OrderStatus(ctx, "regular", trade.TargetOrderID); err == nil && status != "" {
+			targetStatus = status
+		}
+	}
+
+	stopComplete := strings.EqualFold(stopStatus, OrderStatusComplete)
+	targetComplete := strings.EqualFold(targetStatus, OrderStatusComplete)
+
+	switch {
+	case stopComplete && targetComplete:
+		_ = m.closeTrade(trade.ID, ExitReasonBothCompleted, stopStatus, targetStatus)
+	case stopComplete:
+		if trade.TargetOrderID != "" && !isTerminalOrderStatus(targetStatus) {
+			_ = m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID)
+			targetStatus = OrderStatusCancelled
+		}
+		_ = m.closeTrade(trade.ID, ExitReasonStopLoss, stopStatus, targetStatus)
+	case targetComplete:
+		if trade.StopOrderID != "" && !isTerminalOrderStatus(stopStatus) {
+			_ = m.broker.CancelOrder(ctx, "regular", trade.StopOrderID)
+			stopStatus = OrderStatusCancelled
+		}
+		_ = m.closeTrade(trade.ID, ExitReasonTarget, stopStatus, targetStatus)
+	default:
+		_ = m.updateExitOrderStatuses(trade.ID, stopStatus, targetStatus)
 	}
 }
 
@@ -686,6 +770,57 @@ func (m *Manager) clearPendingProtection(id string) error {
 	return m.persist()
 }
 
+func (m *Manager) updateExitOrderStatuses(id, stopStatus, targetStatus string) error {
+	m.mu.Lock()
+	trade, ok := m.trades[id]
+	if !ok {
+		m.mu.Unlock()
+		return errors.New("trade not found")
+	}
+	changed := false
+	if stopStatus != "" && trade.StopOrderStatus != stopStatus {
+		trade.StopOrderStatus = stopStatus
+		changed = true
+	}
+	if targetStatus != "" && trade.TargetOrderStatus != targetStatus {
+		trade.TargetOrderStatus = targetStatus
+		changed = true
+	}
+	if changed {
+		trade.UpdatedAt = time.Now().UTC()
+	}
+	m.mu.Unlock()
+	if !changed {
+		return nil
+	}
+	return m.persist()
+}
+
+func (m *Manager) closeTrade(id, exitReason, stopStatus, targetStatus string) error {
+	m.mu.Lock()
+	trade, ok := m.trades[id]
+	if !ok {
+		m.mu.Unlock()
+		return errors.New("trade not found")
+	}
+	now := time.Now().UTC()
+	trade.TradeStatus = TradeStatusClosed
+	trade.ExitReason = exitReason
+	trade.ClosedAt = &now
+	if stopStatus != "" {
+		trade.StopOrderStatus = stopStatus
+	}
+	if targetStatus != "" {
+		trade.TargetOrderStatus = targetStatus
+	}
+	trade.PendingProtection = nil
+	trade.PendingStopLoss = nil
+	trade.PendingTarget = nil
+	trade.UpdatedAt = now
+	m.mu.Unlock()
+	return m.persist()
+}
+
 func (m *Manager) setPendingStopLoss(id string, req StopLossRequest) (*ManagedTrade, error) {
 	m.mu.Lock()
 	trade, ok := m.trades[id]
@@ -754,6 +889,10 @@ func cloneTrade(trade *ManagedTrade) *ManagedTrade {
 	if trade.PendingTarget != nil {
 		target := *trade.PendingTarget
 		copy.PendingTarget = &target
+	}
+	if trade.ClosedAt != nil {
+		closedAt := *trade.ClosedAt
+		copy.ClosedAt = &closedAt
 	}
 	return &copy
 }
@@ -854,6 +993,23 @@ func shouldDeferProtection(req CreateTradeRequest) bool {
 
 func shouldDeferRiskOrder(trade *ManagedTrade) bool {
 	return !strings.EqualFold(trade.EntryStatus, "COMPLETE")
+}
+
+func ensureTradeOpen(trade *ManagedTrade) error {
+	if isTradeClosed(trade) {
+		return fmt.Errorf("trade is closed: %s", trade.ExitReason)
+	}
+	return nil
+}
+
+func isTradeClosed(trade *ManagedTrade) bool {
+	return strings.EqualFold(trade.TradeStatus, TradeStatusClosed)
+}
+
+func isTerminalOrderStatus(status string) bool {
+	return strings.EqualFold(status, OrderStatusComplete) ||
+		strings.EqualFold(status, OrderStatusCancelled) ||
+		strings.EqualFold(status, OrderStatusRejected)
 }
 
 func pendingProtection(req AutoProtectionRequest) *PendingProtection {

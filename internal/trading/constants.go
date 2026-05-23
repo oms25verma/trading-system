@@ -5,6 +5,19 @@ import "strings"
 const (
 	DefaultSLLimitOffset          = 0.05
 	DefaultCommoditySLLimitOffset = 10.0
+
+	TradeStatusOpen   = "OPEN"
+	TradeStatusClosed = "CLOSED"
+
+	ExitReasonManual        = "MANUAL"
+	ExitReasonStopLoss      = "STOP_LOSS"
+	ExitReasonTarget        = "TARGET"
+	ExitReasonBothCompleted = "BOTH_COMPLETED"
+
+	OrderStatusOpen      = "OPEN"
+	OrderStatusComplete  = "COMPLETE"
+	OrderStatusCancelled = "CANCELLED"
+	OrderStatusRejected  = "REJECTED"
 )
 
 func defaultSLLimitOffset(exchange string) float64 {

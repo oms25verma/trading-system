@@ -168,6 +168,18 @@ This cancels attached stop-loss and target orders, then places a market order in
 curl -X POST http://localhost:8080/trades/<id>/exit
 ```
 
+## OCO behavior
+
+When both stop-loss and target orders exist, the poller checks their Kite order statuses every `POLL_SECONDS`.
+
+```text
+SL COMPLETE     -> cancel target, close trade with exit_reason STOP_LOSS
+Target COMPLETE -> cancel SL, close trade with exit_reason TARGET
+Both COMPLETE   -> close trade with exit_reason BOTH_COMPLETED
+```
+
+Once a trade is closed, set stop-loss, set target, and manual exit APIs are rejected. The polling implementation checks locally tracked open trades that have SL and/or target order ids; trades without exit orders are skipped for OCO status checks.
+
 ## Use Kite
 
 For local development, set this as the redirect URL in the Kite developer console:
@@ -209,4 +221,4 @@ go run ./cmd/server
 
 - Be careful with live orders. Test paper mode first.
 - Kite regular stop-loss orders are day-valid; for longer-lived exits, add a GTT adapter.
-- Target and stop-loss here are separate regular orders. If you need OCO behavior, implement GTT two-leg exits or cancel the sibling order when one completes by consuming order updates.
+- Target and stop-loss here are separate regular orders. The starter provides polling-based OCO behavior; a Kite postback/webhook can be added later for faster production reconciliation.

@@ -37,9 +37,13 @@ type ManagedTrade struct {
 	EntryPrice        float64            `json:"entry_price,omitempty"`
 	EntryOrderID      string             `json:"entry_order_id"`
 	EntryStatus       string             `json:"entry_status,omitempty"`
+	TradeStatus       string             `json:"trade_status,omitempty"`
+	ExitReason        string             `json:"exit_reason,omitempty"`
 	ExitOrderID       string             `json:"exit_order_id,omitempty"`
 	StopOrderID       string             `json:"stop_order_id,omitempty"`
+	StopOrderStatus   string             `json:"stop_order_status,omitempty"`
 	TargetOrderID     string             `json:"target_order_id,omitempty"`
+	TargetOrderStatus string             `json:"target_order_status,omitempty"`
 	StopLoss          *StopLoss          `json:"stop_loss,omitempty"`
 	Target            *Target            `json:"target,omitempty"`
 	PendingProtection *PendingProtection `json:"pending_protection,omitempty"`
@@ -47,6 +51,7 @@ type ManagedTrade struct {
 	PendingTarget     *Target            `json:"pending_target,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
+	ClosedAt          *time.Time         `json:"closed_at,omitempty"`
 }
 
 type StopLoss struct {
