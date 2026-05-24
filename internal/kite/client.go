@@ -90,7 +90,12 @@ type OrderResponse struct {
 }
 
 type OrderStatusResponse struct {
-	Status string `json:"status"`
+	OrderID         string  `json:"order_id"`
+	Status          string  `json:"status"`
+	Price           float64 `json:"price"`
+	TriggerPrice    float64 `json:"trigger_price"`
+	FilledQuantity  int     `json:"filled_quantity"`
+	PendingQuantity int     `json:"pending_quantity"`
 }
 
 func (c *Client) PlaceOrder(ctx context.Context, order OrderRequest) (string, error) {
@@ -131,16 +136,60 @@ func (c *Client) CancelOrder(ctx context.Context, variety, orderID string) error
 }
 
 func (c *Client) OrderStatus(ctx context.Context, orderID string) (string, error) {
+	details, err := c.OrderDetails(ctx, orderID)
+	if err != nil {
+		return "", err
+	}
+	return details.Status, nil
+}
+
+func (c *Client) OrderDetails(ctx context.Context, orderID string) (*OrderDetailsResponse, error) {
 	var out struct {
 		Data []OrderStatusResponse `json:"data"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/orders/"+orderID, nil, &out); err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(out.Data) == 0 {
-		return "", fmt.Errorf("order history not found for %s", orderID)
+		return nil, fmt.Errorf("order history not found for %s", orderID)
 	}
-	return out.Data[len(out.Data)-1].Status, nil
+	latest := out.Data[len(out.Data)-1]
+	return &OrderDetailsResponse{
+		OrderID:         latest.OrderID,
+		Status:          latest.Status,
+		Price:           latest.Price,
+		TriggerPrice:    latest.TriggerPrice,
+		FilledQuantity:  latest.FilledQuantity,
+		PendingQuantity: latest.PendingQuantity,
+	}, nil
+}
+
+type OrderDetailsResponse struct {
+	OrderID         string
+	Status          string
+	Price           float64
+	TriggerPrice    float64
+	FilledQuantity  int
+	PendingQuantity int
+}
+
+type PositionResponse struct {
+	Exchange      string `json:"exchange"`
+	TradingSymbol string `json:"tradingsymbol"`
+	Product       string `json:"product"`
+	Quantity      int    `json:"quantity"`
+}
+
+func (c *Client) Positions(ctx context.Context) ([]PositionResponse, error) {
+	var out struct {
+		Data struct {
+			Net []PositionResponse `json:"net"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/portfolio/positions", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data.Net, nil
 }
 
 func (c *Client) LTP(ctx context.Context, exchange, symbol string) (float64, error) {

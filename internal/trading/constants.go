@@ -9,10 +9,11 @@ const (
 	TradeStatusOpen   = "OPEN"
 	TradeStatusClosed = "CLOSED"
 
-	ExitReasonManual        = "MANUAL"
-	ExitReasonStopLoss      = "STOP_LOSS"
-	ExitReasonTarget        = "TARGET"
-	ExitReasonBothCompleted = "BOTH_COMPLETED"
+	ExitReasonManual         = "MANUAL"
+	ExitReasonManualExternal = "MANUAL_EXTERNAL"
+	ExitReasonStopLoss       = "STOP_LOSS"
+	ExitReasonTarget         = "TARGET"
+	ExitReasonBothCompleted  = "BOTH_COMPLETED"
 
 	OrderStatusOpen      = "OPEN"
 	OrderStatusComplete  = "COMPLETE"

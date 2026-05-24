@@ -549,8 +549,13 @@ func (m *Manager) trailOnce(ctx context.Context) {
 			continue
 		}
 		m.tryApplyPendingProtection(ctx, trade)
-		m.checkOCO(ctx, trade)
+		m.reconcileExternalPosition(ctx, trade)
 		trade, err := m.get(trade.ID)
+		if err != nil || isTradeClosed(trade) {
+			continue
+		}
+		m.reconcileExitOrders(ctx, trade)
+		trade, err = m.get(trade.ID)
 		if err != nil || isTradeClosed(trade) {
 			continue
 		}
@@ -593,21 +598,25 @@ func (m *Manager) trailOnce(ctx context.Context) {
 	}
 }
 
-func (m *Manager) checkOCO(ctx context.Context, trade *ManagedTrade) {
+func (m *Manager) reconcileExitOrders(ctx context.Context, trade *ManagedTrade) {
 	if isTradeClosed(trade) || (trade.StopOrderID == "" && trade.TargetOrderID == "") {
 		return
 	}
 
 	stopStatus := trade.StopOrderStatus
+	var stopDetails *OrderDetails
 	if trade.StopOrderID != "" {
-		if status, err := m.broker.OrderStatus(ctx, "regular", trade.StopOrderID); err == nil && status != "" {
-			stopStatus = status
+		if details, err := m.broker.OrderDetails(ctx, "regular", trade.StopOrderID); err == nil && details != nil {
+			stopDetails = details
+			stopStatus = details.Status
 		}
 	}
 	targetStatus := trade.TargetOrderStatus
+	var targetDetails *OrderDetails
 	if trade.TargetOrderID != "" {
-		if status, err := m.broker.OrderStatus(ctx, "regular", trade.TargetOrderID); err == nil && status != "" {
-			targetStatus = status
+		if details, err := m.broker.OrderDetails(ctx, "regular", trade.TargetOrderID); err == nil && details != nil {
+			targetDetails = details
+			targetStatus = details.Status
 		}
 	}
 
@@ -630,8 +639,34 @@ func (m *Manager) checkOCO(ctx context.Context, trade *ManagedTrade) {
 		}
 		_ = m.closeTrade(trade.ID, ExitReasonTarget, stopStatus, targetStatus)
 	default:
-		_ = m.updateExitOrderStatuses(trade.ID, stopStatus, targetStatus)
+		_ = m.reconcileOpenExitOrderDetails(trade.ID, stopDetails, targetDetails)
 	}
+}
+
+func (m *Manager) reconcileExternalPosition(ctx context.Context, trade *ManagedTrade) {
+	if isTradeClosed(trade) || !strings.EqualFold(trade.EntryStatus, OrderStatusComplete) {
+		return
+	}
+
+	positions, err := m.broker.Positions(ctx)
+	if err != nil {
+		return
+	}
+	if positionQuantity(positions, trade.Exchange, trade.TradingSymbol, trade.Product) != 0 {
+		return
+	}
+
+	stopStatus := trade.StopOrderStatus
+	if trade.StopOrderID != "" && !isTerminalOrderStatus(stopStatus) {
+		_ = m.broker.CancelOrder(ctx, "regular", trade.StopOrderID)
+		stopStatus = OrderStatusCancelled
+	}
+	targetStatus := trade.TargetOrderStatus
+	if trade.TargetOrderID != "" && !isTerminalOrderStatus(targetStatus) {
+		_ = m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID)
+		targetStatus = OrderStatusCancelled
+	}
+	_ = m.closeTrade(trade.ID, ExitReasonManualExternal, stopStatus, targetStatus)
 }
 
 func (m *Manager) tryApplyPendingProtection(ctx context.Context, trade *ManagedTrade) {
@@ -786,6 +821,60 @@ func (m *Manager) updateExitOrderStatuses(id, stopStatus, targetStatus string) e
 		trade.TargetOrderStatus = targetStatus
 		changed = true
 	}
+	if changed {
+		trade.UpdatedAt = time.Now().UTC()
+	}
+	m.mu.Unlock()
+	if !changed {
+		return nil
+	}
+	return m.persist()
+}
+
+func (m *Manager) reconcileOpenExitOrderDetails(id string, stopDetails, targetDetails *OrderDetails) error {
+	m.mu.Lock()
+	trade, ok := m.trades[id]
+	if !ok {
+		m.mu.Unlock()
+		return errors.New("trade not found")
+	}
+
+	changed := false
+	if stopDetails != nil {
+		if trade.StopOrderStatus != stopDetails.Status {
+			trade.StopOrderStatus = stopDetails.Status
+			changed = true
+		}
+		if isTerminalOrderStatus(stopDetails.Status) {
+			trade.StopOrderID = ""
+			trade.StopLoss = nil
+			changed = true
+		} else if trade.StopLoss != nil {
+			if stopDetails.TriggerPrice > 0 && trade.StopLoss.TriggerPrice != stopDetails.TriggerPrice {
+				trade.StopLoss.TriggerPrice = stopDetails.TriggerPrice
+				changed = true
+			}
+			if stopDetails.Price > 0 && trade.StopLoss.LimitPrice != stopDetails.Price {
+				trade.StopLoss.LimitPrice = stopDetails.Price
+				changed = true
+			}
+		}
+	}
+	if targetDetails != nil {
+		if trade.TargetOrderStatus != targetDetails.Status {
+			trade.TargetOrderStatus = targetDetails.Status
+			changed = true
+		}
+		if isTerminalOrderStatus(targetDetails.Status) {
+			trade.TargetOrderID = ""
+			trade.Target = nil
+			changed = true
+		} else if trade.Target != nil && targetDetails.Price > 0 && trade.Target.Price != targetDetails.Price {
+			trade.Target.Price = targetDetails.Price
+			changed = true
+		}
+	}
+
 	if changed {
 		trade.UpdatedAt = time.Now().UTC()
 	}
@@ -1069,4 +1158,15 @@ func minNonZero(a, b float64) float64 {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func positionQuantity(positions []Position, exchange, symbol, product string) int {
+	for _, position := range positions {
+		if strings.EqualFold(position.Exchange, exchange) &&
+			strings.EqualFold(position.TradingSymbol, symbol) &&
+			strings.EqualFold(position.Product, product) {
+			return position.Quantity
+		}
+	}
+	return 0
 }

@@ -10,6 +10,8 @@ type Broker interface {
 	ModifyOrder(ctx context.Context, variety, orderID string, fields map[string]string) error
 	CancelOrder(ctx context.Context, variety, orderID string) error
 	OrderStatus(ctx context.Context, variety, orderID string) (string, error)
+	OrderDetails(ctx context.Context, variety, orderID string) (*OrderDetails, error)
+	Positions(ctx context.Context) ([]Position, error)
 	LTP(ctx context.Context, exchange, symbol string) (float64, error)
 }
 
@@ -25,6 +27,22 @@ type Order struct {
 	Price            float64 `json:"price,omitempty"`
 	TriggerPrice     float64 `json:"trigger_price,omitempty"`
 	MarketProtection *int    `json:"market_protection,omitempty"`
+}
+
+type OrderDetails struct {
+	OrderID         string
+	Status          string
+	Price           float64
+	TriggerPrice    float64
+	FilledQuantity  int
+	PendingQuantity int
+}
+
+type Position struct {
+	Exchange      string
+	TradingSymbol string
+	Product       string
+	Quantity      int
 }
 
 type ManagedTrade struct {

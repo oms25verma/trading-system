@@ -12,6 +12,7 @@ type fakeBroker struct {
 	nextID      int
 	orders      map[string]Order
 	status      map[string]string
+	positions   []Position
 	placeCount  int
 	modifyCount int
 	cancelCount int
@@ -71,6 +72,25 @@ func (f *fakeBroker) OrderStatus(_ context.Context, _ string, orderID string) (s
 		return "", fmt.Errorf("order %s not found", orderID)
 	}
 	return status, nil
+}
+
+func (f *fakeBroker) OrderDetails(_ context.Context, _ string, orderID string) (*OrderDetails, error) {
+	order, ok := f.orders[orderID]
+	if !ok {
+		return nil, fmt.Errorf("order %s not found", orderID)
+	}
+	return &OrderDetails{
+		OrderID:      orderID,
+		Status:       f.status[orderID],
+		Price:        order.Price,
+		TriggerPrice: order.TriggerPrice,
+	}, nil
+}
+
+func (f *fakeBroker) Positions(_ context.Context) ([]Position, error) {
+	out := make([]Position, len(f.positions))
+	copy(out, f.positions)
+	return out, nil
 }
 
 func (f *fakeBroker) LTP(_ context.Context, _, _ string) (float64, error) {
@@ -552,6 +572,7 @@ func TestRemovePendingTargetForOpenLimitEntry(t *testing.T) {
 
 func TestOCOStopLossCompleteCancelsTargetAndClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
 	trade, err := manager.Import(ImportTradeRequest{
 		ID:            "t1",
@@ -592,6 +613,7 @@ func TestOCOStopLossCompleteCancelsTargetAndClosesTrade(t *testing.T) {
 
 func TestOCOTargetCompleteCancelsStopLossAndClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
 	trade, err := manager.Import(ImportTradeRequest{
 		ID:            "t1",
@@ -632,6 +654,7 @@ func TestOCOTargetCompleteCancelsStopLossAndClosesTrade(t *testing.T) {
 
 func TestOCOBothCompleteRaceClosesAsAmbiguousWithoutCancel(t *testing.T) {
 	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
 	trade, err := manager.Import(ImportTradeRequest{
 		ID:            "t1",
@@ -670,6 +693,7 @@ func TestOCOBothCompleteRaceClosesAsAmbiguousWithoutCancel(t *testing.T) {
 
 func TestClosedTradeRejectsFurtherActions(t *testing.T) {
 	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
 	trade, err := manager.Import(ImportTradeRequest{
 		ID:            "t1",
@@ -703,6 +727,169 @@ func TestClosedTradeRejectsFurtherActions(t *testing.T) {
 	}
 	if _, err := manager.Exit(context.Background(), trade.ID); err == nil {
 		t.Fatal("expected closed trade to reject manual exit")
+	}
+}
+
+func TestSingleStopLossCompleteClosesTrade(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.status[trade.StopOrderID] = OrderStatusComplete
+
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonStopLoss {
+		t.Fatalf("expected single SL to close trade, got %+v", trade)
+	}
+}
+
+func TestSingleTargetCompleteClosesTrade(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.status[trade.TargetOrderID] = OrderStatusComplete
+
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonTarget {
+		t.Fatalf("expected single target to close trade, got %+v", trade)
+	}
+}
+
+func TestManualKiteCancelClearsLocalExitOrder(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.status[trade.StopOrderID] = OrderStatusCancelled
+
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.TradeStatus == TradeStatusClosed {
+		t.Fatalf("cancelled SL should not close trade, got %+v", trade)
+	}
+	if trade.StopOrderID != "" || trade.StopLoss != nil {
+		t.Fatalf("expected cancelled SL cleared locally, got %+v", trade)
+	}
+}
+
+func TestManualKiteModifyUpdatesLocalExitPrices(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.orders[trade.StopOrderID] = Order{Price: 87, TriggerPrice: 88}
+
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.StopLoss == nil || trade.StopLoss.TriggerPrice != 88 || trade.StopLoss.LimitPrice != 87 {
+		t.Fatalf("expected local SL prices updated, got %+v", trade.StopLoss)
+	}
+}
+
+func TestExternalManualPositionCloseCancelsExitsAndClosesTrade(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	trade, err := manager.Import(ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 0}}
+
+	manager.trailOnce(context.Background())
+	trade = manager.List()[0]
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonManualExternal {
+		t.Fatalf("expected external manual close, got %+v", trade)
+	}
+	if trade.StopOrderStatus != OrderStatusCancelled || trade.TargetOrderStatus != OrderStatusCancelled {
+		t.Fatalf("expected exits cancelled, got stop=%s target=%s", trade.StopOrderStatus, trade.TargetOrderStatus)
+	}
+	if broker.cancelCount != 2 {
+		t.Fatalf("expected two exit cancels, got %d", broker.cancelCount)
 	}
 }
 

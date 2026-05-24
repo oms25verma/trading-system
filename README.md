@@ -180,6 +180,16 @@ Both COMPLETE   -> close trade with exit_reason BOTH_COMPLETED
 
 Once a trade is closed, set stop-loss, set target, and manual exit APIs are rejected. The polling implementation checks locally tracked open trades that have SL and/or target order ids; trades without exit orders are skipped for OCO status checks.
 
+The poller also reconciles changes made directly in Kite:
+
+```text
+SL/target CANCELLED or REJECTED in Kite -> clear local SL/target state
+SL/target modified in Kite              -> update local price/trigger values
+Position manually flattened in Kite     -> cancel remaining exits and close trade with exit_reason MANUAL_EXTERNAL
+```
+
+Position reconciliation uses Kite net positions for the trade's exchange, symbol, and product.
+
 ## Use Kite
 
 For local development, set this as the redirect URL in the Kite developer console:

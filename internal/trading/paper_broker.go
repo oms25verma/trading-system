@@ -9,11 +9,12 @@ import (
 )
 
 type PaperBroker struct {
-	mu     sync.Mutex
-	nextID int
-	ltp    map[string]float64
-	orders map[string]Order
-	status map[string]string
+	mu        sync.Mutex
+	nextID    int
+	ltp       map[string]float64
+	orders    map[string]Order
+	status    map[string]string
+	positions []Position
 }
 
 func NewPaperBroker() *PaperBroker {
@@ -72,6 +73,31 @@ func (p *PaperBroker) OrderStatus(_ context.Context, _ string, orderID string) (
 		return "", fmt.Errorf("paper order %s not found", orderID)
 	}
 	return status, nil
+}
+
+func (p *PaperBroker) OrderDetails(_ context.Context, _ string, orderID string) (*OrderDetails, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	order, ok := p.orders[orderID]
+	if !ok {
+		return nil, fmt.Errorf("paper order %s not found", orderID)
+	}
+	return &OrderDetails{
+		OrderID:      orderID,
+		Status:       p.status[orderID],
+		Price:        order.Price,
+		TriggerPrice: order.TriggerPrice,
+	}, nil
+}
+
+func (p *PaperBroker) Positions(_ context.Context) ([]Position, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]Position, len(p.positions))
+	copy(out, p.positions)
+	return out, nil
 }
 
 func (p *PaperBroker) CancelOrder(_ context.Context, _ string, orderID string) error {
