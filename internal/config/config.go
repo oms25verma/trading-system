@@ -30,7 +30,7 @@ func Load() Config {
 
 	tradeStorePath := os.Getenv("TRADE_STORE_PATH")
 	if tradeStorePath == "" {
-		tradeStorePath = "data/trades.json"
+		tradeStorePath = "data"
 	}
 
 	return Config{

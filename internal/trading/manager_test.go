@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 type fakeBroker struct {
@@ -961,5 +962,18 @@ func TestJSONStorePersistsAndReloadsTrades(t *testing.T) {
 	}
 	if trades[0].ID != "t1" || trades[0].EntryPrice != 109000 {
 		t.Fatalf("unexpected reloaded trade %+v", trades[0])
+	}
+}
+
+func TestDailyStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
+	got := dailyStorePath("/tmp/trading-data", time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC))
+	want := filepath.Join("/tmp/trading-data", "trades_24_05_2026.json")
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+
+	explicit := "/tmp/custom.json"
+	if got := dailyStorePath(explicit, time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)); got != explicit {
+		t.Fatalf("got %s want %s", got, explicit)
 	}
 }

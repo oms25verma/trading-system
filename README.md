@@ -21,10 +21,12 @@ The server starts on `:8080` and uses the paper broker by default.
 curl http://localhost:8080/healthz
 ```
 
-Trades are persisted to `data/trades.json` by default, so local trade ids survive server restarts. Override the location with:
+Trades are persisted date-wise by default, for example `data/trades_24_05_2026.json`, so local trade ids survive server restarts on the same trading day. Override the directory or exact file with:
 
 ```bash
-export TRADE_STORE_PATH=/path/to/trades.json
+export TRADE_STORE_PATH=/path/to/trading-data
+# or
+export TRADE_STORE_PATH=/path/to/trades_24_05_2026.json
 ```
 
 ## Create a trade

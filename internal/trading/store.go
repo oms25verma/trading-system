@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 )
 
 type Store interface {
@@ -18,7 +20,7 @@ type JSONStore struct {
 }
 
 func NewJSONStore(path string) *JSONStore {
-	return &JSONStore{path: path}
+	return &JSONStore{path: dailyStorePath(path, time.Now())}
 }
 
 func (s *JSONStore) Load() ([]*ManagedTrade, error) {
@@ -61,4 +63,11 @@ func (s *JSONStore) Save(trades []*ManagedTrade) error {
 		return err
 	}
 	return os.Rename(tmp, s.path)
+}
+
+func dailyStorePath(path string, now time.Time) string {
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		return path
+	}
+	return filepath.Join(path, "trades_"+now.Format("02_01_2006")+".json")
 }
