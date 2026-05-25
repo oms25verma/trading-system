@@ -47,6 +47,16 @@ curl -X POST http://localhost:8080/trades \
 
 `market_protection` is required by Kite for `MARKET` and `SL-M` orders. Use `-1` for automatic protection, or use a percentage such as `2` for 2%.
 
+Kite Connect is not MIS-only. This starter defaults to `MIS` when `product` is omitted, but you can pass the product allowed for the segment, such as:
+
+```text
+MIS  - intraday
+CNC  - equity delivery
+NRML - futures/options/commodity carry-forward where allowed
+```
+
+Kite also provides a position conversion API for converting open positions between allowed products such as MIS and NRML/CNC, subject to exchange, product, margin, and RMS rules.
+
 Use the returned `id` in the next calls.
 
 Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit APIs.
