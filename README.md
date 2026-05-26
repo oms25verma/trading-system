@@ -29,6 +29,8 @@ export TRADE_STORE_PATH=/path/to/trading-data
 export TRADE_STORE_PATH=/path/to/trades_24_05_2026.json
 ```
 
+See [.env.example](.env.example) for runtime configuration defaults and [docs/api.md](docs/api.md) for API examples.
+
 ## Create a trade
 
 ```bash

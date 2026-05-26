@@ -40,7 +40,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           routes(manager, kiteClient),
+		Handler:           routes(manager, kiteClient, cfg),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -57,7 +57,7 @@ func main() {
 	}
 }
 
-func routes(manager *trading.Manager, kiteClient *kite.Client) http.Handler {
+func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -100,6 +100,7 @@ func routes(manager *trading.Manager, kiteClient *kite.Client) http.Handler {
 		if !decode(w, r, &req) {
 			return
 		}
+		applyCreateDefaults(&req, cfg)
 		trade, err := manager.Enter(r.Context(), req)
 		writeResult(w, trade, err)
 	})
@@ -140,6 +141,30 @@ func routes(manager *trading.Manager, kiteClient *kite.Client) http.Handler {
 		writeResult(w, trade, err)
 	})
 	return mux
+}
+
+func applyCreateDefaults(req *trading.CreateTradeRequest, cfg config.Config) {
+	if req.Quantity == 0 {
+		req.Quantity = cfg.DefaultQuantity
+	}
+	if req.Product == "" {
+		req.Product = cfg.DefaultProduct
+	}
+	if req.MarketProtection == nil {
+		req.MarketProtection = cfg.DefaultMarketProtection
+	}
+	if req.Protection == nil {
+		return
+	}
+	if req.Protection.StopLossPoints == 0 {
+		req.Protection.StopLossPoints = cfg.DefaultStopLossPoints
+	}
+	if req.Protection.TargetPoints == 0 {
+		req.Protection.TargetPoints = cfg.DefaultTargetPoints
+	}
+	if req.Protection.SLLimitOffset == 0 {
+		req.Protection.SLLimitOffset = cfg.DefaultSLLimitOffset
+	}
 }
 
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
