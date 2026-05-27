@@ -10,8 +10,20 @@ http://localhost:8080
 
 ```json
 {
-  "error": "message"
+  "kind": "VALIDATION",
+  "code": "invalid_quantity",
+  "message": "quantity must be positive"
 }
+```
+
+Common error kinds:
+
+```text
+VALIDATION
+NOT_FOUND
+CONFLICT
+CLOSED
+BROKER
 ```
 
 ## Health

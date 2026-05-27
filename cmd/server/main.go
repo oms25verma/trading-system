@@ -19,10 +19,17 @@ import (
 
 func main() {
 	cfg := config.Load()
+	brokerName := os.Getenv("BROKER")
+	if brokerName == "" {
+		brokerName = "paper"
+	}
+	if err := cfg.Validate(brokerName); err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
 
 	kiteClient := kite.NewClient(cfg.KiteAPIKey, cfg.KiteAPISecret, cfg.AccessToken)
 	var broker trading.Broker
-	if strings.EqualFold(os.Getenv("BROKER"), "kite") {
+	if strings.EqualFold(brokerName, "kite") {
 		broker = kite.NewAdapter(kiteClient)
 		log.Println("broker=kite")
 	} else {
@@ -68,7 +75,7 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /kite/login", func(w http.ResponseWriter, r *http.Request) {
 		loginURL, err := kiteClient.LoginURL()
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeError(w, err)
 			return
 		}
 		http.Redirect(w, r, loginURL, http.StatusFound)
@@ -76,15 +83,12 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /kite/callback", func(w http.ResponseWriter, r *http.Request) {
 		requestToken := r.URL.Query().Get("request_token")
 		if requestToken == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing request_token"})
+			writeError(w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "missing_request_token", Message: "missing request_token"})
 			return
 		}
 		session, err := kiteClient.GenerateSession(r.Context(), requestToken)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"request_token": requestToken,
-				"error":         err.Error(),
-			})
+			writeError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -170,7 +174,11 @@ func applyCreateDefaults(req *trading.CreateTradeRequest, cfg config.Config) {
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, apiError{
+			Kind:    string(trading.ErrorKindValidation),
+			Code:    "invalid_json",
+			Message: err.Error(),
+		})
 		return false
 	}
 	return true
@@ -178,10 +186,50 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 
 func writeResult(w http.ResponseWriter, value any, err error) {
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+type apiError struct {
+	Kind    string `json:"kind"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func writeError(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
+	response := apiError{
+		Kind:    "BROKER",
+		Code:    "broker_error",
+		Message: err.Error(),
+	}
+
+	var domainErr *trading.DomainError
+	if errors.As(err, &domainErr) {
+		response.Kind = string(domainErr.Kind)
+		response.Code = domainErr.Code
+		response.Message = domainErr.Message
+		status = statusForDomainError(domainErr.Kind)
+	}
+
+	writeJSON(w, status, response)
+}
+
+func statusForDomainError(kind trading.ErrorKind) int {
+	switch kind {
+	case trading.ErrorKindValidation:
+		return http.StatusBadRequest
+	case trading.ErrorKindNotFound:
+		return http.StatusNotFound
+	case trading.ErrorKindConflict:
+		return http.StatusConflict
+	case trading.ErrorKindClosed:
+		return http.StatusConflict
+	default:
+		return http.StatusBadRequest
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

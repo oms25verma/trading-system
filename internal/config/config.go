@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -58,6 +60,45 @@ func Load() Config {
 		DefaultTargetPoints:     floatEnv("DEFAULT_TARGET_POINTS", 0),
 		DefaultSLLimitOffset:    floatEnv("DEFAULT_SL_LIMIT_OFFSET", 0),
 	}
+}
+
+func (c Config) Validate(broker string) error {
+	if c.Addr == "" {
+		return fmt.Errorf("HTTP_ADDR is required")
+	}
+	if c.PollInterval <= 0 {
+		return fmt.Errorf("POLL_SECONDS must be positive")
+	}
+	if c.TradeStorePath == "" {
+		return fmt.Errorf("TRADE_STORE_PATH is required")
+	}
+	if c.DefaultProduct == "" {
+		return fmt.Errorf("DEFAULT_PRODUCT is required")
+	}
+	if c.DefaultQuantity <= 0 {
+		return fmt.Errorf("DEFAULT_QUANTITY must be positive")
+	}
+	if c.DefaultStopLossPoints < 0 {
+		return fmt.Errorf("DEFAULT_STOP_LOSS_POINTS cannot be negative")
+	}
+	if c.DefaultTargetPoints < 0 {
+		return fmt.Errorf("DEFAULT_TARGET_POINTS cannot be negative")
+	}
+	if c.DefaultSLLimitOffset < 0 {
+		return fmt.Errorf("DEFAULT_SL_LIMIT_OFFSET cannot be negative")
+	}
+	if strings.EqualFold(broker, "kite") {
+		if c.KiteAPIKey == "" {
+			return fmt.Errorf("KITE_API_KEY is required when BROKER=kite")
+		}
+		if c.KiteAPISecret == "" {
+			return fmt.Errorf("KITE_API_SECRET is required when BROKER=kite")
+		}
+		if c.AccessToken == "" {
+			return fmt.Errorf("KITE_ACCESS_TOKEN is required when BROKER=kite")
+		}
+	}
+	return nil
 }
 
 func intEnv(key string, fallback int) int {

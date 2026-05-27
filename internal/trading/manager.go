@@ -2,7 +2,6 @@ package trading
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -82,10 +81,10 @@ type ImportTradeRequest struct {
 func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTrade, error) {
 	side := strings.ToUpper(req.Side)
 	if side != "BUY" && side != "SELL" {
-		return nil, errors.New("side must be BUY or SELL")
+		return nil, validationError("invalid_side", "side must be BUY or SELL")
 	}
 	if req.Quantity <= 0 {
-		return nil, errors.New("quantity must be positive")
+		return nil, validationError("invalid_quantity", "quantity must be positive")
 	}
 	if req.Protection != nil {
 		if err := validateAutoProtectionRequest(req.Exchange, side, req.Price, *req.Protection); err != nil {
@@ -131,11 +130,11 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	m.mu.Lock()
 	if existing, ok := m.trades[trade.ID]; ok {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("trade id already exists: %s", existing.ID)
+		return nil, conflictError("duplicate_trade_id", fmt.Sprintf("trade id already exists: %s", existing.ID))
 	}
 	if existing := m.findByEntryOrderIDLocked(trade.EntryOrderID); existing != nil {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("entry_order_id already exists on trade %s", existing.ID)
+		return nil, conflictError("duplicate_entry_order_id", fmt.Sprintf("entry_order_id already exists on trade %s", existing.ID))
 	}
 	m.trades[trade.ID] = trade
 	m.mu.Unlock()
@@ -153,13 +152,13 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
 	side := strings.ToUpper(req.Side)
 	if side != "BUY" && side != "SELL" {
-		return nil, errors.New("side must be BUY or SELL")
+		return nil, validationError("invalid_side", "side must be BUY or SELL")
 	}
 	if req.Quantity <= 0 {
-		return nil, errors.New("quantity must be positive")
+		return nil, validationError("invalid_quantity", "quantity must be positive")
 	}
 	if req.EntryOrderID == "" {
-		return nil, errors.New("entry_order_id is required")
+		return nil, validationError("missing_entry_order_id", "entry_order_id is required")
 	}
 
 	now := time.Now().UTC()
@@ -185,11 +184,11 @@ func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
 	m.mu.Lock()
 	if existing, ok := m.trades[trade.ID]; ok {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("trade id already exists: %s", existing.ID)
+		return nil, conflictError("duplicate_trade_id", fmt.Sprintf("trade id already exists: %s", existing.ID))
 	}
 	if existing := m.findByEntryOrderIDLocked(trade.EntryOrderID); existing != nil {
 		m.mu.Unlock()
-		return nil, fmt.Errorf("entry_order_id already exists on trade %s", existing.ID)
+		return nil, conflictError("duplicate_entry_order_id", fmt.Sprintf("entry_order_id already exists on trade %s", existing.ID))
 	}
 	m.trades[trade.ID] = trade
 	m.mu.Unlock()
@@ -208,7 +207,7 @@ type StopLossRequest struct {
 
 func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossRequest) (*ManagedTrade, error) {
 	if req.TriggerPrice <= 0 || req.LimitPrice <= 0 {
-		return nil, errors.New("trigger_price and limit_price are required")
+		return nil, validationError("missing_stop_loss_prices", "trigger_price and limit_price are required")
 	}
 
 	trade, err := m.get(id)
@@ -282,7 +281,7 @@ type TargetRequest struct {
 
 func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (*ManagedTrade, error) {
 	if req.Price <= 0 {
-		return nil, errors.New("price is required")
+		return nil, validationError("missing_price", "price is required")
 	}
 
 	trade, err := m.get(id)
@@ -740,7 +739,7 @@ func (m *Manager) get(id string) (*ManagedTrade, error) {
 	defer m.mu.RUnlock()
 	trade, ok := m.trades[id]
 	if !ok {
-		return nil, errors.New("trade not found")
+		return nil, notFoundError("trade_not_found", "trade not found")
 	}
 	return cloneTrade(trade), nil
 }
@@ -761,7 +760,7 @@ func (m *Manager) setEntryPriceIfMissing(id string, entryPrice float64) error {
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return errors.New("trade not found")
+		return notFoundError("trade_not_found", "trade not found")
 	}
 	if trade.EntryPrice == 0 {
 		trade.EntryPrice = entryPrice
@@ -780,7 +779,7 @@ func (m *Manager) updateEntryStatus(id string, status string) error {
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return errors.New("trade not found")
+		return notFoundError("trade_not_found", "trade not found")
 	}
 	if trade.EntryStatus == status {
 		m.mu.Unlock()
@@ -797,7 +796,7 @@ func (m *Manager) clearPendingProtection(id string) error {
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return errors.New("trade not found")
+		return notFoundError("trade_not_found", "trade not found")
 	}
 	trade.PendingProtection = nil
 	trade.UpdatedAt = time.Now().UTC()
@@ -810,7 +809,7 @@ func (m *Manager) updateExitOrderStatuses(id, stopStatus, targetStatus string) e
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return errors.New("trade not found")
+		return notFoundError("trade_not_found", "trade not found")
 	}
 	changed := false
 	if stopStatus != "" && trade.StopOrderStatus != stopStatus {
@@ -836,7 +835,7 @@ func (m *Manager) reconcileOpenExitOrderDetails(id string, stopDetails, targetDe
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return errors.New("trade not found")
+		return notFoundError("trade_not_found", "trade not found")
 	}
 
 	changed := false
@@ -890,7 +889,7 @@ func (m *Manager) closeTrade(id, exitReason, stopStatus, targetStatus string) er
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return errors.New("trade not found")
+		return notFoundError("trade_not_found", "trade not found")
 	}
 	now := time.Now().UTC()
 	trade.TradeStatus = TradeStatusClosed
@@ -915,7 +914,7 @@ func (m *Manager) setPendingStopLoss(id string, req StopLossRequest) (*ManagedTr
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return nil, errors.New("trade not found")
+		return nil, notFoundError("trade_not_found", "trade not found")
 	}
 	trade.PendingStopLoss = &StopLoss{
 		TriggerPrice: req.TriggerPrice,
@@ -936,7 +935,7 @@ func (m *Manager) setPendingTarget(id string, req TargetRequest) (*ManagedTrade,
 	trade, ok := m.trades[id]
 	if !ok {
 		m.mu.Unlock()
-		return nil, errors.New("trade not found")
+		return nil, notFoundError("trade_not_found", "trade not found")
 	}
 	trade.PendingTarget = &Target{Price: req.Price}
 	trade.UpdatedAt = time.Now().UTC()
@@ -995,10 +994,10 @@ func opposite(side string) string {
 
 func validateStopLimit(exitSide string, triggerPrice, limitPrice float64) error {
 	if exitSide == "BUY" && limitPrice < triggerPrice {
-		return errors.New("for BUY stop-loss orders, limit_price must be equal to or greater than trigger_price")
+		return validationError("invalid_buy_stop_limit", "for BUY stop-loss orders, limit_price must be equal to or greater than trigger_price")
 	}
 	if exitSide == "SELL" && limitPrice > triggerPrice {
-		return errors.New("for SELL stop-loss orders, limit_price must be equal to or less than trigger_price")
+		return validationError("invalid_sell_stop_limit", "for SELL stop-loss orders, limit_price must be equal to or less than trigger_price")
 	}
 	return nil
 }
@@ -1008,10 +1007,10 @@ func validateStopAgainstEntry(trade *ManagedTrade, triggerPrice float64) error {
 		return nil
 	}
 	if trade.Side == "BUY" && triggerPrice >= trade.EntryPrice {
-		return fmt.Errorf("for BUY trades, stop-loss trigger_price must be below entry_price %.2f", trade.EntryPrice)
+		return validationError("invalid_buy_stop_loss", fmt.Sprintf("for BUY trades, stop-loss trigger_price must be below entry_price %.2f", trade.EntryPrice))
 	}
 	if trade.Side == "SELL" && triggerPrice <= trade.EntryPrice {
-		return fmt.Errorf("for SELL trades, stop-loss trigger_price must be above entry_price %.2f", trade.EntryPrice)
+		return validationError("invalid_sell_stop_loss", fmt.Sprintf("for SELL trades, stop-loss trigger_price must be above entry_price %.2f", trade.EntryPrice))
 	}
 	return nil
 }
@@ -1021,26 +1020,26 @@ func validateTargetAgainstEntry(trade *ManagedTrade, targetPrice float64) error 
 		return nil
 	}
 	if trade.Side == "BUY" && targetPrice <= trade.EntryPrice {
-		return fmt.Errorf("for BUY trades, target price must be above entry_price %.2f", trade.EntryPrice)
+		return validationError("invalid_buy_target", fmt.Sprintf("for BUY trades, target price must be above entry_price %.2f", trade.EntryPrice))
 	}
 	if trade.Side == "SELL" && targetPrice >= trade.EntryPrice {
-		return fmt.Errorf("for SELL trades, target price must be below entry_price %.2f", trade.EntryPrice)
+		return validationError("invalid_sell_target", fmt.Sprintf("for SELL trades, target price must be below entry_price %.2f", trade.EntryPrice))
 	}
 	return nil
 }
 
 func validateAutoProtectionRequest(exchange, side string, orderPrice float64, req AutoProtectionRequest) error {
 	if req.StopLossPoints < 0 {
-		return errors.New("stop_loss_points cannot be negative")
+		return validationError("negative_stop_loss_points", "stop_loss_points cannot be negative")
 	}
 	if req.TargetPoints < 0 {
-		return errors.New("target_points cannot be negative")
+		return validationError("negative_target_points", "target_points cannot be negative")
 	}
 	if req.TrailBy < 0 {
-		return errors.New("trail_by cannot be negative")
+		return validationError("negative_trail_by", "trail_by cannot be negative")
 	}
 	if req.SLLimitOffset < 0 {
-		return errors.New("sl_limit_offset cannot be negative")
+		return validationError("negative_sl_limit_offset", "sl_limit_offset cannot be negative")
 	}
 
 	referencePrice := req.ReferencePrice
@@ -1053,11 +1052,11 @@ func validateAutoProtectionRequest(exchange, side string, orderPrice float64, re
 	if req.StopLossPoints > 0 {
 		triggerPrice, limitPrice := stopPrices(exchange, side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
 		if triggerPrice <= 0 || limitPrice <= 0 {
-			return errors.New("computed stop-loss trigger_price and limit_price must be positive")
+			return validationError("invalid_computed_stop_loss", "computed stop-loss trigger_price and limit_price must be positive")
 		}
 	}
 	if req.TargetPoints > 0 && targetPrice(side, referencePrice, req.TargetPoints) <= 0 {
-		return errors.New("computed target price must be positive")
+		return validationError("invalid_computed_target", "computed target price must be positive")
 	}
 	return nil
 }
@@ -1086,7 +1085,7 @@ func shouldDeferRiskOrder(trade *ManagedTrade) bool {
 
 func ensureTradeOpen(trade *ManagedTrade) error {
 	if isTradeClosed(trade) {
-		return fmt.Errorf("trade is closed: %s", trade.ExitReason)
+		return closedError(fmt.Sprintf("trade is closed: %s", trade.ExitReason))
 	}
 	return nil
 }
