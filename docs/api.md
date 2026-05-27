@@ -43,6 +43,39 @@ GET /kite/callback?request_token=...
 
 Orders placed through this API are tagged as `TSLOCAL` when sent to Kite.
 
+## Kite Sync
+
+### Sync Kite Orderbook
+
+```http
+POST /sync/kite
+```
+
+Fetches the current Kite orderbook through the configured broker and stores the latest snapshot in memory.
+
+```json
+{
+  "synced_at": "2026-05-27T10:00:00Z",
+  "orders_synced": 3,
+  "local_system_orders": 1,
+  "external_orders": 2
+}
+```
+
+### List Synced Orders
+
+```http
+GET /orders
+```
+
+Returns the latest locally synced orderbook snapshot. `creation_source` is inferred from Kite `tag`:
+
+```text
+TSLOCAL   -> LOCAL_SYSTEM
+empty tag -> KITE_APP
+other tag -> UNKNOWN
+```
+
 ## Trades
 
 ### List Trades

@@ -97,11 +97,19 @@ type OrderResponse struct {
 
 type OrderStatusResponse struct {
 	OrderID         string  `json:"order_id"`
+	Exchange        string  `json:"exchange"`
+	TradingSymbol   string  `json:"tradingsymbol"`
+	TransactionType string  `json:"transaction_type"`
+	Quantity        int     `json:"quantity"`
+	Product         string  `json:"product"`
+	OrderType       string  `json:"order_type"`
 	Status          string  `json:"status"`
 	Price           float64 `json:"price"`
 	TriggerPrice    float64 `json:"trigger_price"`
+	AveragePrice    float64 `json:"average_price"`
 	FilledQuantity  int     `json:"filled_quantity"`
 	PendingQuantity int     `json:"pending_quantity"`
+	Tag             string  `json:"tag"`
 }
 
 func (c *Client) PlaceOrder(ctx context.Context, order OrderRequest) (string, error) {
@@ -171,6 +179,16 @@ func (c *Client) OrderDetails(ctx context.Context, orderID string) (*OrderDetail
 		FilledQuantity:  latest.FilledQuantity,
 		PendingQuantity: latest.PendingQuantity,
 	}, nil
+}
+
+func (c *Client) Orders(ctx context.Context) ([]OrderStatusResponse, error) {
+	var out struct {
+		Data []OrderStatusResponse `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/orders", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
 }
 
 type OrderDetailsResponse struct {

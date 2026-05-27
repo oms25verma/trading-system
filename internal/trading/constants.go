@@ -5,6 +5,10 @@ import "strings"
 const (
 	LocalSystemOrderTag = "TSLOCAL"
 
+	CreationSourceLocalSystem = "LOCAL_SYSTEM"
+	CreationSourceKiteApp     = "KITE_APP"
+	CreationSourceUnknown     = "UNKNOWN"
+
 	DefaultSLLimitOffset          = 0.05
 	DefaultCommoditySLLimitOffset = 10.0
 

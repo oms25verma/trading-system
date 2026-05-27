@@ -19,6 +19,7 @@ type Manager struct {
 	logger *slog.Logger
 	mu     sync.RWMutex
 	trades map[string]*ManagedTrade
+	orders map[string]*KiteOrder
 }
 
 func NewManager(broker Broker) *Manager {
@@ -32,6 +33,7 @@ func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
 		store:  store,
 		logger: slog.Default(),
 		trades: make(map[string]*ManagedTrade),
+		orders: make(map[string]*KiteOrder),
 	}
 	if store == nil {
 		return manager, nil
@@ -567,6 +569,56 @@ func (m *Manager) ListGroups() []*PositionGroup {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.positionGroupsLocked()
+}
+
+func (m *Manager) ListSyncedOrders() []*KiteOrder {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]*KiteOrder, 0, len(m.orders))
+	for _, order := range m.orders {
+		out = append(out, cloneKiteOrder(order))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].OrderID < out[j].OrderID
+	})
+	return out
+}
+
+func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
+	orders, err := m.broker.Orders(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	syncedAt := time.Now().UTC()
+	result := &SyncResult{SyncedAt: syncedAt}
+	next := make(map[string]*KiteOrder, len(orders))
+	for _, order := range orders {
+		order.SyncedAt = syncedAt
+		order.CreationSource = creationSourceFromTag(order.Tag)
+		next[order.OrderID] = cloneKiteOrder(&order)
+		result.OrdersSynced++
+		if order.CreationSource == CreationSourceLocalSystem {
+			result.LocalSystemOrders++
+		} else {
+			result.ExternalOrders++
+		}
+	}
+
+	m.mu.Lock()
+	m.orders = next
+	m.mu.Unlock()
+
+	if m.logger != nil {
+		m.logger.InfoContext(ctx, "kite_orders_synced",
+			"request_id", observability.RequestID(ctx),
+			"orders_synced", result.OrdersSynced,
+			"local_system_orders", result.LocalSystemOrders,
+			"external_orders", result.ExternalOrders,
+		)
+	}
+	return result, nil
 }
 
 func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
@@ -1106,6 +1158,16 @@ func appendUnique(values []string, value string) []string {
 	return append(values, value)
 }
 
+func creationSourceFromTag(tag string) string {
+	if strings.EqualFold(tag, LocalSystemOrderTag) {
+		return CreationSourceLocalSystem
+	}
+	if tag == "" {
+		return CreationSourceKiteApp
+	}
+	return CreationSourceUnknown
+}
+
 func samePositionGroup(leftExchange, leftSymbol, leftProduct, rightExchange, rightSymbol, rightProduct string) bool {
 	return positionGroupID(leftExchange, leftSymbol, leftProduct) == positionGroupID(rightExchange, rightSymbol, rightProduct)
 }
@@ -1156,6 +1218,14 @@ func cloneTrade(trade *ManagedTrade) *ManagedTrade {
 		closedAt := *trade.ClosedAt
 		copy.ClosedAt = &closedAt
 	}
+	return &copy
+}
+
+func cloneKiteOrder(order *KiteOrder) *KiteOrder {
+	if order == nil {
+		return nil
+	}
+	copy := *order
 	return &copy
 }
 

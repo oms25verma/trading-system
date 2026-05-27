@@ -115,6 +115,13 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, manager.ListGroups())
 	})
+	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, manager.ListSyncedOrders())
+	})
+	mux.HandleFunc("POST /sync/kite", func(w http.ResponseWriter, r *http.Request) {
+		result, err := manager.SyncKite(r.Context())
+		writeResult(r.Context(), w, result, err)
+	})
 	mux.HandleFunc("GET /kite/login", func(w http.ResponseWriter, r *http.Request) {
 		loginURL, err := kiteClient.LoginURL()
 		if err != nil {

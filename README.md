@@ -38,6 +38,8 @@ Every request gets an `X-Request-ID`; pass your own or use the generated respons
 
 Orders created by this service are sent to Kite with tag `TSLOCAL`. This will be used by the sync engine to distinguish local-system orders from Kite app/manual orders.
 
+Use `POST /sync/kite` to fetch the latest Kite orderbook into memory, then `GET /orders` to view the synced snapshot with `creation_source`.
+
 ## Create a trade
 
 ```bash

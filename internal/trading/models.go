@@ -11,6 +11,7 @@ type Broker interface {
 	CancelOrder(ctx context.Context, variety, orderID string) error
 	OrderStatus(ctx context.Context, variety, orderID string) (string, error)
 	OrderDetails(ctx context.Context, variety, orderID string) (*OrderDetails, error)
+	Orders(ctx context.Context) ([]KiteOrder, error)
 	Positions(ctx context.Context) ([]Position, error)
 	LTP(ctx context.Context, exchange, symbol string) (float64, error)
 }
@@ -44,6 +45,32 @@ type Position struct {
 	TradingSymbol string
 	Product       string
 	Quantity      int
+}
+
+type KiteOrder struct {
+	OrderID         string    `json:"order_id"`
+	Exchange        string    `json:"exchange"`
+	TradingSymbol   string    `json:"tradingsymbol"`
+	TransactionType string    `json:"transaction_type"`
+	Quantity        int       `json:"quantity"`
+	FilledQuantity  int       `json:"filled_quantity,omitempty"`
+	PendingQuantity int       `json:"pending_quantity,omitempty"`
+	Product         string    `json:"product"`
+	OrderType       string    `json:"order_type"`
+	Status          string    `json:"status"`
+	Price           float64   `json:"price,omitempty"`
+	TriggerPrice    float64   `json:"trigger_price,omitempty"`
+	AveragePrice    float64   `json:"average_price,omitempty"`
+	Tag             string    `json:"tag,omitempty"`
+	CreationSource  string    `json:"creation_source"`
+	SyncedAt        time.Time `json:"synced_at"`
+}
+
+type SyncResult struct {
+	SyncedAt          time.Time `json:"synced_at"`
+	OrdersSynced      int       `json:"orders_synced"`
+	LocalSystemOrders int       `json:"local_system_orders"`
+	ExternalOrders    int       `json:"external_orders"`
 }
 
 type ManagedTrade struct {

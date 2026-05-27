@@ -58,6 +58,33 @@ func (a *Adapter) OrderDetails(ctx context.Context, _ string, orderID string) (*
 	}, nil
 }
 
+func (a *Adapter) Orders(ctx context.Context) ([]trading.KiteOrder, error) {
+	orders, err := a.client.Orders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]trading.KiteOrder, 0, len(orders))
+	for _, order := range orders {
+		out = append(out, trading.KiteOrder{
+			OrderID:         order.OrderID,
+			Exchange:        order.Exchange,
+			TradingSymbol:   order.TradingSymbol,
+			TransactionType: order.TransactionType,
+			Quantity:        order.Quantity,
+			FilledQuantity:  order.FilledQuantity,
+			PendingQuantity: order.PendingQuantity,
+			Product:         order.Product,
+			OrderType:       order.OrderType,
+			Status:          order.Status,
+			Price:           order.Price,
+			TriggerPrice:    order.TriggerPrice,
+			AveragePrice:    order.AveragePrice,
+			Tag:             order.Tag,
+		})
+	}
+	return out, nil
+}
+
 func (a *Adapter) Positions(ctx context.Context) ([]trading.Position, error) {
 	positions, err := a.client.Positions(ctx)
 	if err != nil {

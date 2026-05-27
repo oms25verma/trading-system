@@ -13,6 +13,7 @@ import (
 type fakeBroker struct {
 	nextID      int
 	orders      map[string]Order
+	synced      []KiteOrder
 	status      map[string]string
 	positions   []Position
 	placeCount  int
@@ -87,6 +88,31 @@ func (f *fakeBroker) OrderDetails(_ context.Context, _ string, orderID string) (
 		Price:        order.Price,
 		TriggerPrice: order.TriggerPrice,
 	}, nil
+}
+
+func (f *fakeBroker) Orders(_ context.Context) ([]KiteOrder, error) {
+	if f.synced != nil {
+		out := make([]KiteOrder, len(f.synced))
+		copy(out, f.synced)
+		return out, nil
+	}
+	out := make([]KiteOrder, 0, len(f.orders))
+	for id, order := range f.orders {
+		out = append(out, KiteOrder{
+			OrderID:         id,
+			Exchange:        order.Exchange,
+			TradingSymbol:   order.TradingSymbol,
+			TransactionType: order.TransactionType,
+			Quantity:        order.Quantity,
+			Product:         order.Product,
+			OrderType:       order.OrderType,
+			Status:          f.status[id],
+			Price:           order.Price,
+			TriggerPrice:    order.TriggerPrice,
+			Tag:             order.Tag,
+		})
+	}
+	return out, nil
 }
 
 func (f *fakeBroker) Positions(_ context.Context) ([]Position, error) {
@@ -258,6 +284,74 @@ func TestLocalSystemOrdersUseTag(t *testing.T) {
 	}
 	if broker.orders[trade.ExitOrderID].Tag != LocalSystemOrderTag {
 		t.Fatalf("expected exit order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.ExitOrderID].Tag)
+	}
+}
+
+func TestSyncKiteOrdersInfersCreationSource(t *testing.T) {
+	broker := newFakeBroker()
+	broker.synced = []KiteOrder{
+		{
+			OrderID:         "local-1",
+			Exchange:        "NSE",
+			TradingSymbol:   "INFY",
+			TransactionType: "BUY",
+			Quantity:        1,
+			Product:         "MIS",
+			OrderType:       "MARKET",
+			Status:          OrderStatusComplete,
+			Tag:             LocalSystemOrderTag,
+		},
+		{
+			OrderID:         "kite-1",
+			Exchange:        "NSE",
+			TradingSymbol:   "TCS",
+			TransactionType: "BUY",
+			Quantity:        1,
+			Product:         "MIS",
+			OrderType:       "MARKET",
+			Status:          OrderStatusComplete,
+		},
+		{
+			OrderID:         "other-1",
+			Exchange:        "NSE",
+			TradingSymbol:   "SBIN",
+			TransactionType: "BUY",
+			Quantity:        1,
+			Product:         "MIS",
+			OrderType:       "MARKET",
+			Status:          OrderStatusComplete,
+			Tag:             "OTHER",
+		},
+	}
+	manager := NewManager(broker)
+
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OrdersSynced != 3 || result.LocalSystemOrders != 1 || result.ExternalOrders != 2 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+
+	orders := manager.ListSyncedOrders()
+	if len(orders) != 3 {
+		t.Fatalf("expected 3 synced orders, got %d", len(orders))
+	}
+	sources := map[string]string{}
+	for _, order := range orders {
+		sources[order.OrderID] = order.CreationSource
+		if order.SyncedAt.IsZero() {
+			t.Fatalf("expected synced_at on %+v", order)
+		}
+	}
+	if sources["local-1"] != CreationSourceLocalSystem {
+		t.Fatalf("expected local source, got %q", sources["local-1"])
+	}
+	if sources["kite-1"] != CreationSourceKiteApp {
+		t.Fatalf("expected kite app source, got %q", sources["kite-1"])
+	}
+	if sources["other-1"] != CreationSourceUnknown {
+		t.Fatalf("expected unknown source, got %q", sources["other-1"])
 	}
 }
 

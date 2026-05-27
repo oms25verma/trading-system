@@ -91,6 +91,29 @@ func (p *PaperBroker) OrderDetails(_ context.Context, _ string, orderID string) 
 	}, nil
 }
 
+func (p *PaperBroker) Orders(_ context.Context) ([]KiteOrder, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]KiteOrder, 0, len(p.orders))
+	for id, order := range p.orders {
+		out = append(out, KiteOrder{
+			OrderID:         id,
+			Exchange:        order.Exchange,
+			TradingSymbol:   order.TradingSymbol,
+			TransactionType: order.TransactionType,
+			Quantity:        order.Quantity,
+			Product:         order.Product,
+			OrderType:       order.OrderType,
+			Status:          p.status[id],
+			Price:           order.Price,
+			TriggerPrice:    order.TriggerPrice,
+			Tag:             order.Tag,
+		})
+	}
+	return out, nil
+}
+
 func (p *PaperBroker) Positions(_ context.Context) ([]Position, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
