@@ -15,12 +15,25 @@ type Store interface {
 	Save(trades []*ManagedTrade) error
 }
 
+type OrderStore interface {
+	LoadOrders() ([]*KiteOrder, error)
+	SaveOrders(orders []*KiteOrder) error
+}
+
 type JSONStore struct {
+	path string
+}
+
+type JSONOrderStore struct {
 	path string
 }
 
 func NewJSONStore(path string) *JSONStore {
 	return &JSONStore{path: dailyStorePath(path, time.Now())}
+}
+
+func NewJSONOrderStore(path string) *JSONOrderStore {
+	return &JSONOrderStore{path: dailyOrderStorePath(path, time.Now())}
 }
 
 func (s *JSONStore) Load() ([]*ManagedTrade, error) {
@@ -65,9 +78,59 @@ func (s *JSONStore) Save(trades []*ManagedTrade) error {
 	return os.Rename(tmp, s.path)
 }
 
+func (s *JSONOrderStore) LoadOrders() ([]*KiteOrder, error) {
+	payload, err := os.ReadFile(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(payload) == 0 {
+		return nil, nil
+	}
+
+	var orders []*KiteOrder
+	if err := json.Unmarshal(payload, &orders); err != nil {
+		return nil, err
+	}
+	return orders, nil
+}
+
+func (s *JSONOrderStore) SaveOrders(orders []*KiteOrder) error {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	sort.Slice(orders, func(i, j int) bool {
+		return orders[i].OrderID < orders[j].OrderID
+	})
+
+	payload, err := json.MarshalIndent(orders, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
+}
+
 func dailyStorePath(path string, now time.Time) string {
 	if strings.EqualFold(filepath.Ext(path), ".json") {
 		return path
 	}
 	return filepath.Join(path, "trades_"+now.Format("02_01_2006")+".json")
+}
+
+func dailyOrderStorePath(path string, now time.Time) string {
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		ext := filepath.Ext(path)
+		return strings.TrimSuffix(path, ext) + "_orders" + ext
+	}
+	return filepath.Join(path, "orders_"+now.Format("02_01_2006")+".json")
 }

@@ -1234,6 +1234,43 @@ func TestJSONStorePersistsAndReloadsTrades(t *testing.T) {
 	}
 }
 
+func TestJSONOrderStorePersistsAndReloadsSyncedOrders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trades.json")
+	broker := newFakeBroker()
+	broker.synced = []KiteOrder{
+		{
+			OrderID:         "local-1",
+			Exchange:        "NSE",
+			TradingSymbol:   "INFY",
+			TransactionType: "BUY",
+			Quantity:        1,
+			Product:         "MIS",
+			OrderType:       "MARKET",
+			Status:          OrderStatusComplete,
+			Tag:             LocalSystemOrderTag,
+		},
+	}
+	manager, err := NewManagerWithStores(broker, NewJSONStore(path), NewJSONOrderStore(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewManagerWithStores(newFakeBroker(), NewJSONStore(path), NewJSONOrderStore(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders := reloaded.ListSyncedOrders()
+	if len(orders) != 1 {
+		t.Fatalf("expected one reloaded order, got %d", len(orders))
+	}
+	if orders[0].OrderID != "local-1" || orders[0].CreationSource != CreationSourceLocalSystem {
+		t.Fatalf("unexpected reloaded order %+v", orders[0])
+	}
+}
+
 func TestDailyStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
 	got := dailyStorePath("/tmp/trading-data", time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC))
 	want := filepath.Join("/tmp/trading-data", "trades_24_05_2026.json")
@@ -1244,5 +1281,19 @@ func TestDailyStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
 	explicit := "/tmp/custom.json"
 	if got := dailyStorePath(explicit, time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)); got != explicit {
 		t.Fatalf("got %s want %s", got, explicit)
+	}
+}
+
+func TestDailyOrderStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
+	got := dailyOrderStorePath("/tmp/trading-data", time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC))
+	want := filepath.Join("/tmp/trading-data", "orders_24_05_2026.json")
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+
+	explicit := "/tmp/custom.json"
+	wantExplicit := "/tmp/custom_orders.json"
+	if got := dailyOrderStorePath(explicit, time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)); got != wantExplicit {
+		t.Fatalf("got %s want %s", got, wantExplicit)
 	}
 }

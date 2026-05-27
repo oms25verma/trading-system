@@ -51,7 +51,7 @@ Orders placed through this API are tagged as `TSLOCAL` when sent to Kite.
 POST /sync/kite
 ```
 
-Fetches the current Kite orderbook through the configured broker and stores the latest snapshot in memory.
+Fetches the current Kite orderbook through the configured broker and stores the latest snapshot locally. With directory storage, the snapshot is saved as `orders_DD_MM_YYYY.json`.
 
 ```json
 {

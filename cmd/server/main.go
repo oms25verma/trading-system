@@ -41,7 +41,7 @@ func main() {
 	}
 	logger.Info("broker_selected", "broker", brokerName)
 
-	manager, err := trading.NewManagerWithStore(broker, trading.NewJSONStore(cfg.TradeStorePath))
+	manager, err := trading.NewManagerWithStores(broker, trading.NewJSONStore(cfg.TradeStorePath), trading.NewJSONOrderStore(cfg.TradeStorePath))
 	if err != nil {
 		logger.Error("manager_init_failed", "error", err)
 		os.Exit(1)

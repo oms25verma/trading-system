@@ -14,12 +14,13 @@ import (
 )
 
 type Manager struct {
-	broker Broker
-	store  Store
-	logger *slog.Logger
-	mu     sync.RWMutex
-	trades map[string]*ManagedTrade
-	orders map[string]*KiteOrder
+	broker     Broker
+	store      Store
+	orderStore OrderStore
+	logger     *slog.Logger
+	mu         sync.RWMutex
+	trades     map[string]*ManagedTrade
+	orders     map[string]*KiteOrder
 }
 
 func NewManager(broker Broker) *Manager {
@@ -28,30 +29,48 @@ func NewManager(broker Broker) *Manager {
 }
 
 func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
+	return NewManagerWithStores(broker, store, nil)
+}
+
+func NewManagerWithStores(broker Broker, store Store, orderStore OrderStore) (*Manager, error) {
 	manager := &Manager{
-		broker: broker,
-		store:  store,
-		logger: slog.Default(),
-		trades: make(map[string]*ManagedTrade),
-		orders: make(map[string]*KiteOrder),
-	}
-	if store == nil {
-		return manager, nil
+		broker:     broker,
+		store:      store,
+		orderStore: orderStore,
+		logger:     slog.Default(),
+		trades:     make(map[string]*ManagedTrade),
+		orders:     make(map[string]*KiteOrder),
 	}
 
-	trades, err := store.Load()
-	if err != nil {
-		return nil, err
-	}
-	for _, trade := range trades {
-		if trade == nil || trade.ID == "" {
-			continue
+	if store != nil {
+		trades, err := store.Load()
+		if err != nil {
+			return nil, err
 		}
-		if trade.TradeStatus == "" {
-			trade.TradeStatus = TradeStatusOpen
+		for _, trade := range trades {
+			if trade == nil || trade.ID == "" {
+				continue
+			}
+			if trade.TradeStatus == "" {
+				trade.TradeStatus = TradeStatusOpen
+			}
+			manager.trades[trade.ID] = cloneTrade(trade)
 		}
-		manager.trades[trade.ID] = cloneTrade(trade)
 	}
+
+	if orderStore != nil {
+		orders, err := orderStore.LoadOrders()
+		if err != nil {
+			return nil, err
+		}
+		for _, order := range orders {
+			if order == nil || order.OrderID == "" {
+				continue
+			}
+			manager.orders[order.OrderID] = cloneKiteOrder(order)
+		}
+	}
+
 	return manager, nil
 }
 
@@ -609,6 +628,9 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	m.mu.Lock()
 	m.orders = next
 	m.mu.Unlock()
+	if err := m.persistOrders(); err != nil {
+		return nil, err
+	}
 
 	if m.logger != nil {
 		m.logger.InfoContext(ctx, "kite_orders_synced",
@@ -843,6 +865,13 @@ func (m *Manager) persist() error {
 		return nil
 	}
 	return m.store.Save(m.List())
+}
+
+func (m *Manager) persistOrders() error {
+	if m.orderStore == nil {
+		return nil
+	}
+	return m.orderStore.SaveOrders(m.ListSyncedOrders())
 }
 
 func (m *Manager) setEntryPriceIfMissing(id string, entryPrice float64) error {
