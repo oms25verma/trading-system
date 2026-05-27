@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,27 +19,31 @@ import (
 
 func main() {
 	cfg := config.Load()
+	logger := newLogger(cfg)
+	slog.SetDefault(logger)
+
 	brokerName := os.Getenv("BROKER")
 	if brokerName == "" {
 		brokerName = "paper"
 	}
 	if err := cfg.Validate(brokerName); err != nil {
-		log.Fatalf("invalid config: %v", err)
+		logger.Error("config_invalid", "error", err)
+		os.Exit(1)
 	}
 
 	kiteClient := kite.NewClient(cfg.KiteAPIKey, cfg.KiteAPISecret, cfg.AccessToken)
 	var broker trading.Broker
 	if strings.EqualFold(brokerName, "kite") {
 		broker = kite.NewAdapter(kiteClient)
-		log.Println("broker=kite")
 	} else {
 		broker = trading.NewPaperBroker()
-		log.Println("broker=paper")
 	}
+	logger.Info("broker_selected", "broker", brokerName)
 
 	manager, err := trading.NewManagerWithStore(broker, trading.NewJSONStore(cfg.TradeStorePath))
 	if err != nil {
-		log.Fatal(err)
+		logger.Error("manager_init_failed", "error", err)
+		os.Exit(1)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -58,10 +62,24 @@ func main() {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("listening on %s", cfg.Addr)
+	logger.Info("server_listening", "addr", cfg.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		logger.Error("server_failed", "error", err)
+		os.Exit(1)
 	}
+}
+
+func newLogger(cfg config.Config) *slog.Logger {
+	level := slog.LevelInfo
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 }
 
 func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config) http.Handler {
@@ -214,6 +232,7 @@ func writeError(w http.ResponseWriter, err error) {
 		status = statusForDomainError(domainErr.Kind)
 	}
 
+	slog.Warn("api_error", "status", status, "kind", response.Kind, "code", response.Code, "message", response.Message)
 	writeJSON(w, status, response)
 }
 

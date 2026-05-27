@@ -3,6 +3,7 @@ package trading
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 type Manager struct {
 	broker Broker
 	store  Store
+	logger *slog.Logger
 	mu     sync.RWMutex
 	trades map[string]*ManagedTrade
 }
@@ -25,6 +27,7 @@ func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
 	manager := &Manager{
 		broker: broker,
 		store:  store,
+		logger: slog.Default(),
 		trades: make(map[string]*ManagedTrade),
 	}
 	if store == nil {
@@ -141,6 +144,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
+	m.logTradeEvent("trade_created", trade)
 
 	if req.Protection != nil && !shouldDeferProtection(req) {
 		return m.applyAutoProtection(ctx, trade.ID, req.Price, *req.Protection)
@@ -196,6 +200,7 @@ func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
 		return nil, err
 	}
 
+	m.logTradeEvent("trade_imported", trade)
 	return cloneTrade(trade), nil
 }
 
@@ -226,9 +231,14 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 		return nil, err
 	}
 	if shouldDeferRiskOrder(trade) {
-		return m.setPendingStopLoss(id, req)
+		result, err := m.setPendingStopLoss(id, req)
+		if err == nil {
+			m.logTradeEvent("stop_loss_pending", result)
+		}
+		return result, err
 	}
 	orderID := trade.StopOrderID
+	action := "created"
 	if orderID == "" {
 		orderID, err = m.broker.PlaceOrder(ctx, Order{
 			Exchange:        trade.Exchange,
@@ -246,6 +256,7 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 			return nil, err
 		}
 	} else {
+		action = "modified"
 		err = m.broker.ModifyOrder(ctx, "regular", orderID, map[string]string{
 			"order_type":    "SL",
 			"trigger_price": money(req.TriggerPrice),
@@ -272,6 +283,7 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
+	m.logTradeEvent("stop_loss_"+action, result)
 	return result, nil
 }
 
@@ -295,10 +307,15 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 		return nil, err
 	}
 	if shouldDeferRiskOrder(trade) {
-		return m.setPendingTarget(id, req)
+		result, err := m.setPendingTarget(id, req)
+		if err == nil {
+			m.logTradeEvent("target_pending", result)
+		}
+		return result, err
 	}
 
 	orderID := trade.TargetOrderID
+	action := "created"
 	if orderID == "" {
 		orderID, err = m.broker.PlaceOrder(ctx, Order{
 			Exchange:        trade.Exchange,
@@ -315,6 +332,7 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 			return nil, err
 		}
 	} else {
+		action = "modified"
 		err = m.broker.ModifyOrder(ctx, "regular", orderID, map[string]string{
 			"order_type": "LIMIT",
 			"price":      money(req.Price),
@@ -336,6 +354,7 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
+	m.logTradeEvent("target_"+action, result)
 	return result, nil
 }
 
@@ -423,6 +442,7 @@ func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade,
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
+	m.logTradeEvent("stop_loss_removed", result)
 	return result, nil
 }
 
@@ -452,6 +472,7 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
+	m.logTradeEvent("target_removed", result)
 	return result, nil
 }
 
@@ -514,6 +535,7 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
+	m.logTradeEvent("trade_manual_exit", result)
 	return result, nil
 }
 
@@ -881,7 +903,15 @@ func (m *Manager) reconcileOpenExitOrderDetails(id string, stopDetails, targetDe
 	if !changed {
 		return nil
 	}
-	return m.persist()
+	if err := m.persist(); err != nil {
+		return err
+	}
+	m.logger.Info("external_exit_order_reconciled",
+		"trade_id", id,
+		"stop_order_status", orderStatusFromDetails(stopDetails),
+		"target_order_status", orderStatusFromDetails(targetDetails),
+	)
+	return nil
 }
 
 func (m *Manager) closeTrade(id, exitReason, stopStatus, targetStatus string) error {
@@ -905,8 +935,13 @@ func (m *Manager) closeTrade(id, exitReason, stopStatus, targetStatus string) er
 	trade.PendingStopLoss = nil
 	trade.PendingTarget = nil
 	trade.UpdatedAt = now
+	result := cloneTrade(trade)
 	m.mu.Unlock()
-	return m.persist()
+	if err := m.persist(); err != nil {
+		return err
+	}
+	m.logTradeEvent("trade_closed", result)
+	return nil
 }
 
 func (m *Manager) setPendingStopLoss(id string, req StopLossRequest) (*ManagedTrade, error) {
@@ -954,6 +989,25 @@ func (m *Manager) findByEntryOrderIDLocked(entryOrderID string) *ManagedTrade {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) logTradeEvent(event string, trade *ManagedTrade) {
+	if m.logger == nil || trade == nil {
+		return
+	}
+	m.logger.Info(event,
+		"trade_id", trade.ID,
+		"exchange", trade.Exchange,
+		"tradingsymbol", trade.TradingSymbol,
+		"side", trade.Side,
+		"quantity", trade.Quantity,
+		"product", trade.Product,
+		"entry_order_id", trade.EntryOrderID,
+		"stop_order_id", trade.StopOrderID,
+		"target_order_id", trade.TargetOrderID,
+		"trade_status", trade.TradeStatus,
+		"exit_reason", trade.ExitReason,
+	)
 }
 
 func cloneTrade(trade *ManagedTrade) *ManagedTrade {
@@ -1168,4 +1222,11 @@ func positionQuantity(positions []Position, exchange, symbol, product string) in
 		}
 	}
 	return 0
+}
+
+func orderStatusFromDetails(details *OrderDetails) string {
+	if details == nil {
+		return ""
+	}
+	return details.Status
 }

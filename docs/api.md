@@ -193,6 +193,25 @@ Cancels SL/target and places a market order in the opposite direction.
 - Runs OCO.
 - Detects manual external position flattening.
 
+## Logging
+
+The server writes structured JSON logs to stdout. Configure level with:
+
+```bash
+export LOG_LEVEL=info
+```
+
+Supported levels:
+
+```text
+debug
+info
+warn
+error
+```
+
+Lifecycle events include trade creation/import, SL/target create/modify/remove, manual exit, OCO/external close, reconciliation events, API errors, broker selection, and server startup.
+
 ## Future API Docs
 
 - Add OpenAPI/Swagger spec.

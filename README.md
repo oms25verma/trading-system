@@ -31,6 +31,8 @@ export TRADE_STORE_PATH=/path/to/trades_24_05_2026.json
 
 See [.env.example](.env.example) for runtime configuration defaults and [docs/api.md](docs/api.md) for API examples.
 
+Logs are emitted as structured JSON to stdout. Set `LOG_LEVEL=debug|info|warn|error`.
+
 ## Create a trade
 
 ```bash

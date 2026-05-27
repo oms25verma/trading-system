@@ -21,6 +21,7 @@ type Config struct {
 	DefaultStopLossPoints   float64
 	DefaultTargetPoints     float64
 	DefaultSLLimitOffset    float64
+	LogLevel                string
 }
 
 func Load() Config {
@@ -59,7 +60,16 @@ func Load() Config {
 		DefaultStopLossPoints:   floatEnv("DEFAULT_STOP_LOSS_POINTS", 0),
 		DefaultTargetPoints:     floatEnv("DEFAULT_TARGET_POINTS", 0),
 		DefaultSLLimitOffset:    floatEnv("DEFAULT_SL_LIMIT_OFFSET", 0),
+		LogLevel:                stringEnv("LOG_LEVEL", "info"),
 	}
+}
+
+func stringEnv(key, fallback string) string {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	return raw
 }
 
 func (c Config) Validate(broker string) error {
