@@ -36,6 +36,8 @@ Logs are emitted as structured JSON to stdout. Set `LOG_LEVEL=debug|info|warn|er
 
 Every request gets an `X-Request-ID`; pass your own or use the generated response header to filter correlated logs. Kite broker request/response metadata is logged at `debug` level with sensitive fields redacted.
 
+Orders created by this service are sent to Kite with tag `TSLOCAL`. This will be used by the sync engine to distinguish local-system orders from Kite app/manual orders.
+
 ## Create a trade
 
 ```bash

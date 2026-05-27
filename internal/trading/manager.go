@@ -116,6 +116,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		Validity:         "DAY",
 		Price:            req.Price,
 		MarketProtection: req.MarketProtection,
+		Tag:              LocalSystemOrderTag,
 	})
 	if err != nil {
 		return nil, err
@@ -260,6 +261,7 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 			Validity:        "DAY",
 			Price:           req.LimitPrice,
 			TriggerPrice:    req.TriggerPrice,
+			Tag:             LocalSystemOrderTag,
 		})
 		if err != nil {
 			return nil, err
@@ -336,6 +338,7 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 			Variety:         "regular",
 			Validity:        "DAY",
 			Price:           req.Price,
+			Tag:             LocalSystemOrderTag,
 		})
 		if err != nil {
 			return nil, err
@@ -515,6 +518,7 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 		Variety:          "regular",
 		Validity:         "DAY",
 		MarketProtection: intPtr(-1),
+		Tag:              LocalSystemOrderTag,
 	})
 	if err != nil {
 		return nil, err

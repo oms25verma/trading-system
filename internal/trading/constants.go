@@ -3,6 +3,8 @@ package trading
 import "strings"
 
 const (
+	LocalSystemOrderTag = "TSLOCAL"
+
 	DefaultSLLimitOffset          = 0.05
 	DefaultCommoditySLLimitOffset = 10.0
 

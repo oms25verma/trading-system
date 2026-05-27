@@ -27,6 +27,7 @@ func (a *Adapter) PlaceOrder(ctx context.Context, order trading.Order) (string, 
 		Price:            order.Price,
 		TriggerPrice:     order.TriggerPrice,
 		MarketProtection: order.MarketProtection,
+		Tag:              order.Tag,
 	})
 }
 

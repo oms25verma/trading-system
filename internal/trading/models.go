@@ -27,6 +27,7 @@ type Order struct {
 	Price            float64 `json:"price,omitempty"`
 	TriggerPrice     float64 `json:"trigger_price,omitempty"`
 	MarketProtection *int    `json:"market_protection,omitempty"`
+	Tag              string  `json:"tag,omitempty"`
 }
 
 type OrderDetails struct {

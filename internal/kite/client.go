@@ -88,6 +88,7 @@ type OrderRequest struct {
 	Price            float64 `json:"price,omitempty"`
 	TriggerPrice     float64 `json:"trigger_price,omitempty"`
 	MarketProtection *int    `json:"market_protection,omitempty"`
+	Tag              string  `json:"tag,omitempty"`
 }
 
 type OrderResponse struct {
@@ -117,6 +118,9 @@ func (c *Client) PlaceOrder(ctx context.Context, order OrderRequest) (string, er
 	setFloat(form, "trigger_price", order.TriggerPrice)
 	if order.MarketProtection != nil {
 		form.Set("market_protection", strconv.Itoa(*order.MarketProtection))
+	}
+	if order.Tag != "" {
+		form.Set("tag", order.Tag)
 	}
 
 	var out struct {

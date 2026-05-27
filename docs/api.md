@@ -41,6 +41,8 @@ GET /kite/callback?request_token=...
 
 `/kite/login` redirects to Kite. `/kite/callback` exchanges `request_token` for `access_token`.
 
+Orders placed through this API are tagged as `TSLOCAL` when sent to Kite.
+
 ## Trades
 
 ### List Trades

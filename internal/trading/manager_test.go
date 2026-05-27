@@ -217,6 +217,50 @@ func TestEnterRejectsOppositeSideWhenActiveGroupExists(t *testing.T) {
 	}
 }
 
+func TestLocalSystemOrdersUseTag(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.orders[trade.EntryOrderID].Tag != LocalSystemOrderTag {
+		t.Fatalf("expected entry order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.EntryOrderID].Tag)
+	}
+
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.orders[trade.StopOrderID].Tag != LocalSystemOrderTag {
+		t.Fatalf("expected stop-loss order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.StopOrderID].Tag)
+	}
+
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.orders[trade.TargetOrderID].Tag != LocalSystemOrderTag {
+		t.Fatalf("expected target order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.TargetOrderID].Tag)
+	}
+
+	trade, err = manager.Exit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.orders[trade.ExitOrderID].Tag != LocalSystemOrderTag {
+		t.Fatalf("expected exit order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.ExitOrderID].Tag)
+	}
+}
+
 func TestListGroupsWarnsForOppositeExposureAcrossProducts(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
