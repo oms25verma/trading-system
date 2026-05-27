@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"trading-system/internal/observability"
 )
 
 const baseURL = "https://api.kite.trade"
@@ -22,6 +25,7 @@ type Client struct {
 	apiSecret   string
 	accessToken string
 	httpClient  *http.Client
+	logger      *slog.Logger
 }
 
 func NewClient(apiKey, apiSecret, accessToken string) *Client {
@@ -30,6 +34,7 @@ func NewClient(apiKey, apiSecret, accessToken string) *Client {
 		apiSecret:   apiSecret,
 		accessToken: accessToken,
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		logger:      slog.Default(),
 	}
 }
 
@@ -215,7 +220,7 @@ func (c *Client) doForm(ctx context.Context, method, path string, form url.Value
 	if form != nil {
 		body = strings.NewReader(form.Encode())
 	}
-	return c.do(ctx, method, path, body, out)
+	return c.doAuthenticated(ctx, method, path, body, out, safeFormValues(form))
 }
 
 func (c *Client) doPublicForm(ctx context.Context, method, path string, form url.Values, out any) error {
@@ -223,7 +228,10 @@ func (c *Client) doPublicForm(ctx context.Context, method, path string, form url
 	if form != nil {
 		body = strings.NewReader(form.Encode())
 	}
+	return c.doPublic(ctx, method, path, body, out, safeFormValues(form))
+}
 
+func (c *Client) doPublic(ctx context.Context, method, path string, body io.Reader, out any, requestFields map[string]string) error {
 	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, body)
 	if err != nil {
 		return err
@@ -233,19 +241,25 @@ func (c *Client) doPublicForm(ctx context.Context, method, path string, form url
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
+	startedAt := time.Now()
+	c.logBrokerRequest(ctx, method, path, requestFields)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		c.logBrokerError(ctx, method, path, time.Since(startedAt), err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logBrokerError(ctx, method, path, time.Since(startedAt), err)
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, true)
 		return fmt.Errorf("kite %s %s failed: status=%d body=%s", method, path, resp.StatusCode, bytes.TrimSpace(payload))
 	}
+	c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, false)
 	if out == nil || len(payload) == 0 {
 		return nil
 	}
@@ -253,6 +267,10 @@ func (c *Client) doPublicForm(ctx context.Context, method, path string, form url
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
+	return c.doAuthenticated(ctx, method, path, body, out, nil)
+}
+
+func (c *Client) doAuthenticated(ctx context.Context, method, path string, body io.Reader, out any, requestFields map[string]string) error {
 	if c.apiKey == "" || c.accessToken == "" {
 		return errors.New("missing KITE_API_KEY or KITE_ACCESS_TOKEN")
 	}
@@ -267,23 +285,113 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ou
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
+	startedAt := time.Now()
+	c.logBrokerRequest(ctx, method, path, requestFields)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		c.logBrokerError(ctx, method, path, time.Since(startedAt), err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
+		c.logBrokerError(ctx, method, path, time.Since(startedAt), err)
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, true)
 		return fmt.Errorf("kite %s %s failed: status=%d body=%s", method, path, resp.StatusCode, bytes.TrimSpace(payload))
 	}
+	c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, false)
 	if out == nil || len(payload) == 0 {
 		return nil
 	}
 	return json.Unmarshal(payload, out)
+}
+
+func (c *Client) logBrokerRequest(ctx context.Context, method, path string, requestFields map[string]string) {
+	if c.logger == nil {
+		return
+	}
+	args := []any{
+		"request_id", observability.RequestID(ctx),
+		"broker", "kite",
+		"method", method,
+		"path", path,
+	}
+	if len(requestFields) > 0 {
+		args = append(args, "request_fields", requestFields)
+	}
+	c.logger.DebugContext(ctx, "broker_request_started", args...)
+}
+
+func (c *Client) logBrokerResponse(ctx context.Context, method, path string, statusCode int, duration time.Duration, payload []byte, failed bool) {
+	if c.logger == nil {
+		return
+	}
+	args := []any{
+		"request_id", observability.RequestID(ctx),
+		"broker", "kite",
+		"method", method,
+		"path", path,
+		"status", statusCode,
+		"duration_ms", duration.Milliseconds(),
+		"response_bytes", len(payload),
+	}
+	if failed {
+		args = append(args, "response_body", safeResponseBody(payload))
+		c.logger.WarnContext(ctx, "broker_request_failed", args...)
+		return
+	}
+	c.logger.DebugContext(ctx, "broker_request_finished", args...)
+}
+
+func (c *Client) logBrokerError(ctx context.Context, method, path string, duration time.Duration, err error) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.WarnContext(ctx, "broker_request_failed",
+		"request_id", observability.RequestID(ctx),
+		"broker", "kite",
+		"method", method,
+		"path", path,
+		"duration_ms", duration.Milliseconds(),
+		"error", err,
+	)
+}
+
+func safeFormValues(form url.Values) map[string]string {
+	if len(form) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(form))
+	for key := range form {
+		value := form.Get(key)
+		if isSensitiveField(key) {
+			value = "[REDACTED]"
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func isSensitiveField(key string) bool {
+	switch strings.ToLower(key) {
+	case "api_key", "api_secret", "access_token", "request_token", "checksum", "authorization":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeResponseBody(payload []byte) string {
+	const limit = 500
+	body := string(bytes.TrimSpace(payload))
+	if len(body) > limit {
+		return body[:limit] + "...[truncated]"
+	}
+	return body
 }
 
 func setFloat(form url.Values, key string, value float64) {

@@ -33,7 +33,7 @@ See [.env.example](.env.example) for runtime configuration defaults and [docs/ap
 
 Logs are emitted as structured JSON to stdout. Set `LOG_LEVEL=debug|info|warn|error`.
 
-Every request gets an `X-Request-ID`; pass your own or use the generated response header to filter correlated logs.
+Every request gets an `X-Request-ID`; pass your own or use the generated response header to filter correlated logs. Kite broker request/response metadata is logged at `debug` level with sensitive fields redacted.
 
 ## Create a trade
 

@@ -226,7 +226,7 @@ If omitted, the server generates one and returns it:
 X-Request-ID: <generated-id>
 ```
 
-Logs include `request_id`, so you can filter all API and manager lifecycle logs for one request.
+Logs include `request_id`, so you can filter all API, manager lifecycle, and Kite broker logs for one request. Broker request/response metadata is logged at `debug` level and sensitive fields are redacted.
 
 ## Future API Docs
 
