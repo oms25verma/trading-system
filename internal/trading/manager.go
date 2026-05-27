@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"trading-system/internal/observability"
 )
 
 type Manager struct {
@@ -144,7 +146,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
-	m.logTradeEvent("trade_created", trade)
+	m.logTradeEvent(ctx, "trade_created", trade)
 
 	if req.Protection != nil && !shouldDeferProtection(req) {
 		return m.applyAutoProtection(ctx, trade.ID, req.Price, *req.Protection)
@@ -153,7 +155,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	return cloneTrade(trade), nil
 }
 
-func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
+func (m *Manager) Import(ctx context.Context, req ImportTradeRequest) (*ManagedTrade, error) {
 	side := strings.ToUpper(req.Side)
 	if side != "BUY" && side != "SELL" {
 		return nil, validationError("invalid_side", "side must be BUY or SELL")
@@ -200,7 +202,7 @@ func (m *Manager) Import(req ImportTradeRequest) (*ManagedTrade, error) {
 		return nil, err
 	}
 
-	m.logTradeEvent("trade_imported", trade)
+	m.logTradeEvent(ctx, "trade_imported", trade)
 	return cloneTrade(trade), nil
 }
 
@@ -233,7 +235,7 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	if shouldDeferRiskOrder(trade) {
 		result, err := m.setPendingStopLoss(id, req)
 		if err == nil {
-			m.logTradeEvent("stop_loss_pending", result)
+			m.logTradeEvent(ctx, "stop_loss_pending", result)
 		}
 		return result, err
 	}
@@ -283,7 +285,7 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
-	m.logTradeEvent("stop_loss_"+action, result)
+	m.logTradeEvent(ctx, "stop_loss_"+action, result)
 	return result, nil
 }
 
@@ -309,7 +311,7 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 	if shouldDeferRiskOrder(trade) {
 		result, err := m.setPendingTarget(id, req)
 		if err == nil {
-			m.logTradeEvent("target_pending", result)
+			m.logTradeEvent(ctx, "target_pending", result)
 		}
 		return result, err
 	}
@@ -354,7 +356,7 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
-	m.logTradeEvent("target_"+action, result)
+	m.logTradeEvent(ctx, "target_"+action, result)
 	return result, nil
 }
 
@@ -442,7 +444,7 @@ func (m *Manager) RemoveStopLoss(ctx context.Context, id string) (*ManagedTrade,
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
-	m.logTradeEvent("stop_loss_removed", result)
+	m.logTradeEvent(ctx, "stop_loss_removed", result)
 	return result, nil
 }
 
@@ -472,7 +474,7 @@ func (m *Manager) RemoveTarget(ctx context.Context, id string) (*ManagedTrade, e
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
-	m.logTradeEvent("target_removed", result)
+	m.logTradeEvent(ctx, "target_removed", result)
 	return result, nil
 }
 
@@ -535,7 +537,7 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	if err := m.persist(); err != nil {
 		return nil, err
 	}
-	m.logTradeEvent("trade_manual_exit", result)
+	m.logTradeEvent(ctx, "trade_manual_exit", result)
 	return result, nil
 }
 
@@ -559,7 +561,8 @@ func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.trailOnce(ctx)
+			pollCtx, _ := observability.EnsureRequestID(ctx, "poll-"+observability.NewRequestID())
+			m.trailOnce(pollCtx)
 		}
 	}
 }
@@ -646,21 +649,21 @@ func (m *Manager) reconcileExitOrders(ctx context.Context, trade *ManagedTrade) 
 
 	switch {
 	case stopComplete && targetComplete:
-		_ = m.closeTrade(trade.ID, ExitReasonBothCompleted, stopStatus, targetStatus)
+		_ = m.closeTrade(ctx, trade.ID, ExitReasonBothCompleted, stopStatus, targetStatus)
 	case stopComplete:
 		if trade.TargetOrderID != "" && !isTerminalOrderStatus(targetStatus) {
 			_ = m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID)
 			targetStatus = OrderStatusCancelled
 		}
-		_ = m.closeTrade(trade.ID, ExitReasonStopLoss, stopStatus, targetStatus)
+		_ = m.closeTrade(ctx, trade.ID, ExitReasonStopLoss, stopStatus, targetStatus)
 	case targetComplete:
 		if trade.StopOrderID != "" && !isTerminalOrderStatus(stopStatus) {
 			_ = m.broker.CancelOrder(ctx, "regular", trade.StopOrderID)
 			stopStatus = OrderStatusCancelled
 		}
-		_ = m.closeTrade(trade.ID, ExitReasonTarget, stopStatus, targetStatus)
+		_ = m.closeTrade(ctx, trade.ID, ExitReasonTarget, stopStatus, targetStatus)
 	default:
-		_ = m.reconcileOpenExitOrderDetails(trade.ID, stopDetails, targetDetails)
+		_ = m.reconcileOpenExitOrderDetails(ctx, trade.ID, stopDetails, targetDetails)
 	}
 }
 
@@ -687,7 +690,7 @@ func (m *Manager) reconcileExternalPosition(ctx context.Context, trade *ManagedT
 		_ = m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID)
 		targetStatus = OrderStatusCancelled
 	}
-	_ = m.closeTrade(trade.ID, ExitReasonManualExternal, stopStatus, targetStatus)
+	_ = m.closeTrade(ctx, trade.ID, ExitReasonManualExternal, stopStatus, targetStatus)
 }
 
 func (m *Manager) tryApplyPendingProtection(ctx context.Context, trade *ManagedTrade) {
@@ -852,7 +855,7 @@ func (m *Manager) updateExitOrderStatuses(id, stopStatus, targetStatus string) e
 	return m.persist()
 }
 
-func (m *Manager) reconcileOpenExitOrderDetails(id string, stopDetails, targetDetails *OrderDetails) error {
+func (m *Manager) reconcileOpenExitOrderDetails(ctx context.Context, id string, stopDetails, targetDetails *OrderDetails) error {
 	m.mu.Lock()
 	trade, ok := m.trades[id]
 	if !ok {
@@ -907,6 +910,7 @@ func (m *Manager) reconcileOpenExitOrderDetails(id string, stopDetails, targetDe
 		return err
 	}
 	m.logger.Info("external_exit_order_reconciled",
+		"request_id", observability.RequestID(ctx),
 		"trade_id", id,
 		"stop_order_status", orderStatusFromDetails(stopDetails),
 		"target_order_status", orderStatusFromDetails(targetDetails),
@@ -914,7 +918,7 @@ func (m *Manager) reconcileOpenExitOrderDetails(id string, stopDetails, targetDe
 	return nil
 }
 
-func (m *Manager) closeTrade(id, exitReason, stopStatus, targetStatus string) error {
+func (m *Manager) closeTrade(ctx context.Context, id, exitReason, stopStatus, targetStatus string) error {
 	m.mu.Lock()
 	trade, ok := m.trades[id]
 	if !ok {
@@ -940,7 +944,7 @@ func (m *Manager) closeTrade(id, exitReason, stopStatus, targetStatus string) er
 	if err := m.persist(); err != nil {
 		return err
 	}
-	m.logTradeEvent("trade_closed", result)
+	m.logTradeEvent(ctx, "trade_closed", result)
 	return nil
 }
 
@@ -991,11 +995,12 @@ func (m *Manager) findByEntryOrderIDLocked(entryOrderID string) *ManagedTrade {
 	return nil
 }
 
-func (m *Manager) logTradeEvent(event string, trade *ManagedTrade) {
+func (m *Manager) logTradeEvent(ctx context.Context, event string, trade *ManagedTrade) {
 	if m.logger == nil || trade == nil {
 		return
 	}
-	m.logger.Info(event,
+	m.logger.InfoContext(ctx, event,
+		"request_id", observability.RequestID(ctx),
 		"trade_id", trade.ID,
 		"exchange", trade.Exchange,
 		"tradingsymbol", trade.TradingSymbol,

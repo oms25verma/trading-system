@@ -186,7 +186,7 @@ func TestEnterWithStopLossUsesDefaultLimitOffset(t *testing.T) {
 func TestManualRiskValidationAgainstEntry(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -348,7 +348,7 @@ func TestManualTargetForOpenLimitEntryIsDeferred(t *testing.T) {
 func TestSetStopLossModifiesExistingOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "MCX",
 		TradingSymbol: "SILVERM26JUNFUT",
@@ -386,7 +386,7 @@ func TestSetStopLossModifiesExistingOrder(t *testing.T) {
 func TestSetTargetModifiesExistingOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -424,7 +424,7 @@ func TestSetTargetModifiesExistingOrder(t *testing.T) {
 func TestRemoveStopLossCancelsExistingOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "MCX",
 		TradingSymbol: "SILVERM26JUNFUT",
@@ -457,7 +457,7 @@ func TestRemoveStopLossCancelsExistingOrder(t *testing.T) {
 func TestRemoveTargetCancelsExistingOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -575,7 +575,7 @@ func TestOCOStopLossCompleteCancelsTargetAndClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -616,7 +616,7 @@ func TestOCOTargetCompleteCancelsStopLossAndClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -657,7 +657,7 @@ func TestOCOBothCompleteRaceClosesAsAmbiguousWithoutCancel(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -696,7 +696,7 @@ func TestClosedTradeRejectsFurtherActions(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -735,7 +735,7 @@ func TestSingleStopLossCompleteClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -765,7 +765,7 @@ func TestSingleTargetCompleteClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -795,7 +795,7 @@ func TestManualKiteCancelClearsLocalExitOrder(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -828,7 +828,7 @@ func TestManualKiteModifyUpdatesLocalExitPrices(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -858,7 +858,7 @@ func TestExternalManualPositionCloseCancelsExitsAndClosesTrade(t *testing.T) {
 	broker := newFakeBroker()
 	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
-	trade, err := manager.Import(ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -896,7 +896,7 @@ func TestExternalManualPositionCloseCancelsExitsAndClosesTrade(t *testing.T) {
 
 func TestImportRejectsDuplicates(t *testing.T) {
 	manager := NewManager(newFakeBroker())
-	_, err := manager.Import(ImportTradeRequest{
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -908,7 +908,7 @@ func TestImportRejectsDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Import(ImportTradeRequest{
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -919,7 +919,7 @@ func TestImportRejectsDuplicates(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected duplicate id to fail")
 	}
-	if _, err := manager.Import(ImportTradeRequest{
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t2",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -938,7 +938,7 @@ func TestJSONStorePersistsAndReloadsTrades(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = manager.Import(ImportTradeRequest{
+	_, err = manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "MCX",
 		TradingSymbol: "SILVERM26JUNFUT",

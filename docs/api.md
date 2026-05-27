@@ -212,6 +212,22 @@ error
 
 Lifecycle events include trade creation/import, SL/target create/modify/remove, manual exit, OCO/external close, reconciliation events, API errors, broker selection, and server startup.
 
+## Request Correlation
+
+Every HTTP request gets a request id. You can pass one:
+
+```bash
+curl -H 'X-Request-ID: my-debug-id-001' http://localhost:8080/trades
+```
+
+If omitted, the server generates one and returns it:
+
+```text
+X-Request-ID: <generated-id>
+```
+
+Logs include `request_id`, so you can filter all API and manager lifecycle logs for one request.
+
 ## Future API Docs
 
 - Add OpenAPI/Swagger spec.

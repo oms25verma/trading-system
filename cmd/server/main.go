@@ -14,6 +14,7 @@ import (
 
 	"trading-system/internal/config"
 	"trading-system/internal/kite"
+	"trading-system/internal/observability"
 	"trading-system/internal/trading"
 )
 
@@ -51,7 +52,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           routes(manager, kiteClient, cfg),
+		Handler:           requestIDMiddleware(routes(manager, kiteClient, cfg), logger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -67,6 +68,27 @@ func main() {
 		logger.Error("server_failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func requestIDMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, requestID := observability.EnsureRequestID(r.Context(), r.Header.Get("X-Request-ID"))
+		w.Header().Set("X-Request-ID", requestID)
+
+		startedAt := time.Now()
+		logger.InfoContext(ctx, "http_request_started",
+			"request_id", requestID,
+			"method", r.Method,
+			"path", r.URL.Path,
+		)
+		next.ServeHTTP(w, r.WithContext(ctx))
+		logger.InfoContext(ctx, "http_request_finished",
+			"request_id", requestID,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"duration_ms", time.Since(startedAt).Milliseconds(),
+		)
+	})
 }
 
 func newLogger(cfg config.Config) *slog.Logger {
@@ -93,7 +115,7 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /kite/login", func(w http.ResponseWriter, r *http.Request) {
 		loginURL, err := kiteClient.LoginURL()
 		if err != nil {
-			writeError(w, err)
+			writeError(r.Context(), w, err)
 			return
 		}
 		http.Redirect(w, r, loginURL, http.StatusFound)
@@ -101,12 +123,12 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /kite/callback", func(w http.ResponseWriter, r *http.Request) {
 		requestToken := r.URL.Query().Get("request_token")
 		if requestToken == "" {
-			writeError(w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "missing_request_token", Message: "missing request_token"})
+			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "missing_request_token", Message: "missing request_token"})
 			return
 		}
 		session, err := kiteClient.GenerateSession(r.Context(), requestToken)
 		if err != nil {
-			writeError(w, err)
+			writeError(r.Context(), w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -124,15 +146,15 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		}
 		applyCreateDefaults(&req, cfg)
 		trade, err := manager.Enter(r.Context(), req)
-		writeResult(w, trade, err)
+		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("POST /trades/import", func(w http.ResponseWriter, r *http.Request) {
 		var req trading.ImportTradeRequest
 		if !decode(w, r, &req) {
 			return
 		}
-		trade, err := manager.Import(req)
-		writeResult(w, trade, err)
+		trade, err := manager.Import(r.Context(), req)
+		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("POST /trades/{id}/stop-loss", func(w http.ResponseWriter, r *http.Request) {
 		var req trading.StopLossRequest
@@ -140,11 +162,11 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			return
 		}
 		trade, err := manager.AddStopLoss(r.Context(), r.PathValue("id"), req)
-		writeResult(w, trade, err)
+		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("DELETE /trades/{id}/stop-loss", func(w http.ResponseWriter, r *http.Request) {
 		trade, err := manager.RemoveStopLoss(r.Context(), r.PathValue("id"))
-		writeResult(w, trade, err)
+		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("POST /trades/{id}/target", func(w http.ResponseWriter, r *http.Request) {
 		var req trading.TargetRequest
@@ -152,15 +174,15 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			return
 		}
 		trade, err := manager.AddTarget(r.Context(), r.PathValue("id"), req)
-		writeResult(w, trade, err)
+		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("DELETE /trades/{id}/target", func(w http.ResponseWriter, r *http.Request) {
 		trade, err := manager.RemoveTarget(r.Context(), r.PathValue("id"))
-		writeResult(w, trade, err)
+		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("POST /trades/{id}/exit", func(w http.ResponseWriter, r *http.Request) {
 		trade, err := manager.Exit(r.Context(), r.PathValue("id"))
-		writeResult(w, trade, err)
+		writeResult(r.Context(), w, trade, err)
 	})
 	return mux
 }
@@ -202,9 +224,9 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	return true
 }
 
-func writeResult(w http.ResponseWriter, value any, err error) {
+func writeResult(ctx context.Context, w http.ResponseWriter, value any, err error) {
 	if err != nil {
-		writeError(w, err)
+		writeError(ctx, w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
@@ -216,7 +238,7 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-func writeError(w http.ResponseWriter, err error) {
+func writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status := http.StatusBadGateway
 	response := apiError{
 		Kind:    "BROKER",
@@ -232,7 +254,13 @@ func writeError(w http.ResponseWriter, err error) {
 		status = statusForDomainError(domainErr.Kind)
 	}
 
-	slog.Warn("api_error", "status", status, "kind", response.Kind, "code", response.Code, "message", response.Message)
+	slog.WarnContext(ctx, "api_error",
+		"request_id", observability.RequestID(ctx),
+		"status", status,
+		"kind", response.Kind,
+		"code", response.Code,
+		"message", response.Message,
+	)
 	writeJSON(w, status, response)
 }
 
