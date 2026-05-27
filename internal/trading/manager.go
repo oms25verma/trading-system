@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,12 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		if err := validateAutoProtectionRequest(req.Exchange, side, req.Price, *req.Protection); err != nil {
 			return nil, err
 		}
+	}
+	if existing := m.activeOppositeSideGroup(req.Exchange, req.TradingSymbol, valueOr(req.Product, "MIS"), side); existing != nil {
+		return nil, conflictError(
+			"opposite_side_active_group",
+			fmt.Sprintf("active %s group already exists for %s:%s %s; use exit/reduction flow instead of creating an opposite-side entry", existing.Side, existing.Exchange, existing.TradingSymbol, existing.Product),
+		)
 	}
 
 	now := time.Now().UTC()
@@ -552,6 +559,12 @@ func (m *Manager) List() []*ManagedTrade {
 	return out
 }
 
+func (m *Manager) ListGroups() []*PositionGroup {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.positionGroupsLocked()
+}
+
 func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -993,6 +1006,104 @@ func (m *Manager) findByEntryOrderIDLocked(entryOrderID string) *ManagedTrade {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) activeOppositeSideGroup(exchange, symbol, product, side string) *PositionGroup {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, group := range m.positionGroupsLocked() {
+		if !samePositionGroup(group.Exchange, group.TradingSymbol, group.Product, exchange, symbol, product) {
+			continue
+		}
+		if group.Side != "" && group.Side != side {
+			return group
+		}
+	}
+	return nil
+}
+
+func (m *Manager) positionGroupsLocked() []*PositionGroup {
+	groupsByID := make(map[string]*PositionGroup)
+	for _, trade := range m.trades {
+		if isTradeClosed(trade) {
+			continue
+		}
+		groupID := positionGroupID(trade.Exchange, trade.TradingSymbol, trade.Product)
+		group := groupsByID[groupID]
+		if group == nil {
+			group = &PositionGroup{
+				ID:            groupID,
+				Exchange:      strings.ToUpper(trade.Exchange),
+				TradingSymbol: strings.ToUpper(trade.TradingSymbol),
+				Product:       strings.ToUpper(trade.Product),
+				Side:          strings.ToUpper(trade.Side),
+				TradeStatus:   TradeStatusOpen,
+				CreatedAt:     trade.CreatedAt,
+				UpdatedAt:     trade.UpdatedAt,
+			}
+			groupsByID[groupID] = group
+		}
+		group.TradeIDs = append(group.TradeIDs, trade.ID)
+		group.Quantity += trade.Quantity
+		if trade.EntryPrice > 0 {
+			group.AverageEntryPrice += trade.EntryPrice * float64(trade.Quantity)
+		}
+		if trade.CreatedAt.Before(group.CreatedAt) {
+			group.CreatedAt = trade.CreatedAt
+		}
+		if trade.UpdatedAt.After(group.UpdatedAt) {
+			group.UpdatedAt = trade.UpdatedAt
+		}
+	}
+
+	groups := make([]*PositionGroup, 0, len(groupsByID))
+	for _, group := range groupsByID {
+		sort.Strings(group.TradeIDs)
+		if group.Quantity > 0 && group.AverageEntryPrice > 0 {
+			group.AverageEntryPrice = group.AverageEntryPrice / float64(group.Quantity)
+		}
+		groups = append(groups, group)
+	}
+	addCrossProductExposureWarnings(groups)
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].ID < groups[j].ID
+	})
+	return groups
+}
+
+func addCrossProductExposureWarnings(groups []*PositionGroup) {
+	for i, group := range groups {
+		for j, other := range groups {
+			if i == j {
+				continue
+			}
+			if group.Exchange != other.Exchange || group.TradingSymbol != other.TradingSymbol {
+				continue
+			}
+			if group.Product == other.Product || group.Side == other.Side {
+				continue
+			}
+			group.Warnings = appendUnique(group.Warnings, "OPPOSITE_EXPOSURE_ACROSS_PRODUCTS")
+		}
+	}
+}
+
+func positionGroupID(exchange, symbol, product string) string {
+	return strings.ToUpper(exchange) + ":" + strings.ToUpper(symbol) + ":" + strings.ToUpper(product)
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func samePositionGroup(leftExchange, leftSymbol, leftProduct, rightExchange, rightSymbol, rightProduct string) bool {
+	return positionGroupID(leftExchange, leftSymbol, leftProduct) == positionGroupID(rightExchange, rightSymbol, rightProduct)
 }
 
 func (m *Manager) logTradeEvent(ctx context.Context, event string, trade *ManagedTrade) {

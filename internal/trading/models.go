@@ -72,6 +72,21 @@ type ManagedTrade struct {
 	ClosedAt          *time.Time         `json:"closed_at,omitempty"`
 }
 
+type PositionGroup struct {
+	ID                string    `json:"id"`
+	Exchange          string    `json:"exchange"`
+	TradingSymbol     string    `json:"tradingsymbol"`
+	Product           string    `json:"product"`
+	Side              string    `json:"side"`
+	Quantity          int       `json:"quantity"`
+	AverageEntryPrice float64   `json:"average_entry_price,omitempty"`
+	TradeIDs          []string  `json:"trade_ids"`
+	TradeStatus       string    `json:"trade_status"`
+	Warnings          []string  `json:"warnings,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 type StopLoss struct {
 	TriggerPrice float64 `json:"trigger_price"`
 	LimitPrice   float64 `json:"limit_price"`

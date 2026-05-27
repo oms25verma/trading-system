@@ -2,6 +2,7 @@ package trading
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -125,6 +126,136 @@ func TestEnterWithOnlyTargetPlacesTarget(t *testing.T) {
 	}
 	if broker.placeCount != 2 {
 		t.Fatalf("expected entry + target orders, got %d", broker.placeCount)
+	}
+}
+
+func TestListGroupsAggregatesOpenSameSideTrades(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	first, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "nse",
+		TradingSymbol: "infy",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "mis",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t2",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      3,
+		Product:       "MIS",
+		EntryPrice:    104,
+		EntryOrderID:  "kite-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected one group, got %d", len(groups))
+	}
+	group := groups[0]
+	if group.ID != "NSE:INFY:MIS" || group.Side != "BUY" {
+		t.Fatalf("unexpected group identity: %+v", group)
+	}
+	if group.Quantity != 4 {
+		t.Fatalf("expected quantity 4, got %d", group.Quantity)
+	}
+	if group.AverageEntryPrice != 103 {
+		t.Fatalf("expected average price 103, got %f", group.AverageEntryPrice)
+	}
+	if len(group.TradeIDs) != 2 || group.TradeIDs[0] != first.ID || group.TradeIDs[1] != second.ID {
+		t.Fatalf("unexpected trade ids: %+v", group.TradeIDs)
+	}
+}
+
+func TestEnterRejectsOppositeSideWhenActiveGroupExists(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "SELL",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err == nil {
+		t.Fatal("expected opposite-side entry to fail")
+	}
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "opposite_side_active_group" {
+		t.Fatalf("expected opposite_side_active_group, got %v", err)
+	}
+	if broker.placeCount != 0 {
+		t.Fatalf("expected validation before broker call, got %d place calls", broker.placeCount)
+	}
+}
+
+func TestListGroupsWarnsForOppositeExposureAcrossProducts(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "mis-buy",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "nrml-sell",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "SELL",
+		Quantity:      1,
+		Product:       "NRML",
+		EntryPrice:    101,
+		EntryOrderID:  "kite-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 2 {
+		t.Fatalf("expected two groups, got %d", len(groups))
+	}
+	for _, group := range groups {
+		if len(group.Warnings) != 1 || group.Warnings[0] != "OPPOSITE_EXPOSURE_ACROSS_PRODUCTS" {
+			t.Fatalf("expected opposite exposure warning for %+v", group)
+		}
 	}
 }
 

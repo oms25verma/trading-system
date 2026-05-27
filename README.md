@@ -5,6 +5,7 @@ This is a small starter service for managing trades through a broker adapter. It
 - buy/sell entry orders
 - add/remove stop-loss orders
 - add/remove target orders
+- active position groups from current local trades
 - app-managed trailing stop-loss by polling LTP and modifying the stop order
 - paper broker mode for local testing
 - Kite HTTP adapter using Kite Connect v3 endpoints
@@ -66,6 +67,8 @@ Kite also provides a position conversion API for converting open positions betwe
 Use the returned `id` in the next calls.
 
 Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit APIs.
+
+Use `GET /groups` to see active position groups aggregated by `exchange + tradingsymbol + product`. The service now rejects a new opposite-side entry when an active group already exists for the same key; use the exit flow for reducing/closing that position. Opposite exposure across products for the same symbol is allowed for now but appears in group `warnings`.
 
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 

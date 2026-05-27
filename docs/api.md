@@ -49,6 +49,41 @@ GET /kite/callback?request_token=...
 GET /trades
 ```
 
+## Position Groups
+
+### List Active Position Groups
+
+```http
+GET /groups
+```
+
+Groups are currently derived from open local trades and keyed by `exchange + tradingsymbol + product`.
+
+Example response:
+
+```json
+[
+  {
+    "id": "MCX:SILVERM26JUNFUT:MIS",
+    "exchange": "MCX",
+    "tradingsymbol": "SILVERM26JUNFUT",
+    "product": "MIS",
+    "side": "SELL",
+    "quantity": 2,
+    "average_entry_price": 109000,
+    "trade_ids": ["silverm26junfut-..."],
+    "trade_status": "OPEN",
+    "warnings": ["OPPOSITE_EXPOSURE_ACROSS_PRODUCTS"],
+    "created_at": "2026-05-24T09:15:00Z",
+    "updated_at": "2026-05-24T09:16:00Z"
+  }
+]
+```
+
+Creating a new opposite-side entry for an active group is rejected with `CONFLICT/opposite_side_active_group`; use the exit flow to reduce or close the existing position.
+
+If the same symbol has opposite exposure across different products, for example `BUY MIS` and `SELL NRML`, groups include `OPPOSITE_EXPOSURE_ACROSS_PRODUCTS` in `warnings`.
+
 ### Create Trade
 
 ```http
