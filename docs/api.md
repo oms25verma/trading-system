@@ -45,18 +45,19 @@ Orders placed through this API are tagged as `TSLOCAL` when sent to Kite.
 
 ## Kite Sync
 
-### Sync Kite Orderbook
+### Sync Kite Data
 
 ```http
 POST /sync/kite
 ```
 
-Fetches the current Kite orderbook through the configured broker and stores the latest snapshot locally. With directory storage, the snapshot is saved as `orders_DD_MM_YYYY.json`.
+Fetches the current Kite orderbook and net positions through the configured broker and stores the latest snapshots locally. With directory storage, snapshots are saved as `orders_DD_MM_YYYY.json` and `positions_DD_MM_YYYY.json`.
 
 ```json
 {
-  "synced_at": "2026-05-27T10:00:00Z",
+  "synced_at": "2026-05-28T10:00:00Z",
   "orders_synced": 3,
+  "positions_synced": 2,
   "local_system_orders": 1,
   "external_orders": 2
 }
@@ -75,6 +76,14 @@ TSLOCAL   -> LOCAL_SYSTEM
 empty tag -> KITE_APP
 other tag -> UNKNOWN
 ```
+
+### List Synced Positions
+
+```http
+GET /positions
+```
+
+Returns the latest locally synced Kite net position snapshot.
 
 ## Trades
 

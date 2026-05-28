@@ -47,6 +47,14 @@ type Position struct {
 	Quantity      int
 }
 
+type KitePosition struct {
+	Exchange      string    `json:"exchange"`
+	TradingSymbol string    `json:"tradingsymbol"`
+	Product       string    `json:"product"`
+	Quantity      int       `json:"quantity"`
+	SyncedAt      time.Time `json:"synced_at"`
+}
+
 type KiteOrder struct {
 	OrderID         string    `json:"order_id"`
 	Exchange        string    `json:"exchange"`
@@ -69,6 +77,7 @@ type KiteOrder struct {
 type SyncResult struct {
 	SyncedAt          time.Time `json:"synced_at"`
 	OrdersSynced      int       `json:"orders_synced"`
+	PositionsSynced   int       `json:"positions_synced"`
 	LocalSystemOrders int       `json:"local_system_orders"`
 	ExternalOrders    int       `json:"external_orders"`
 }

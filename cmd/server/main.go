@@ -41,7 +41,7 @@ func main() {
 	}
 	logger.Info("broker_selected", "broker", brokerName)
 
-	manager, err := trading.NewManagerWithStores(broker, trading.NewJSONStore(cfg.TradeStorePath), trading.NewJSONOrderStore(cfg.TradeStorePath))
+	manager, err := trading.NewManagerWithAllStores(broker, trading.NewJSONStore(cfg.TradeStorePath), trading.NewJSONOrderStore(cfg.TradeStorePath), trading.NewJSONPositionStore(cfg.TradeStorePath))
 	if err != nil {
 		logger.Error("manager_init_failed", "error", err)
 		os.Exit(1)
@@ -117,6 +117,9 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	})
 	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, manager.ListSyncedOrders())
+	})
+	mux.HandleFunc("GET /positions", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, manager.ListSyncedPositions())
 	})
 	mux.HandleFunc("POST /sync/kite", func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.SyncKite(r.Context())

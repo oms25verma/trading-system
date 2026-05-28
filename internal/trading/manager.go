@@ -14,13 +14,15 @@ import (
 )
 
 type Manager struct {
-	broker     Broker
-	store      Store
-	orderStore OrderStore
-	logger     *slog.Logger
-	mu         sync.RWMutex
-	trades     map[string]*ManagedTrade
-	orders     map[string]*KiteOrder
+	broker        Broker
+	store         Store
+	orderStore    OrderStore
+	positionStore PositionStore
+	logger        *slog.Logger
+	mu            sync.RWMutex
+	trades        map[string]*ManagedTrade
+	orders        map[string]*KiteOrder
+	positions     map[string]*KitePosition
 }
 
 func NewManager(broker Broker) *Manager {
@@ -33,13 +35,19 @@ func NewManagerWithStore(broker Broker, store Store) (*Manager, error) {
 }
 
 func NewManagerWithStores(broker Broker, store Store, orderStore OrderStore) (*Manager, error) {
+	return NewManagerWithAllStores(broker, store, orderStore, nil)
+}
+
+func NewManagerWithAllStores(broker Broker, store Store, orderStore OrderStore, positionStore PositionStore) (*Manager, error) {
 	manager := &Manager{
-		broker:     broker,
-		store:      store,
-		orderStore: orderStore,
-		logger:     slog.Default(),
-		trades:     make(map[string]*ManagedTrade),
-		orders:     make(map[string]*KiteOrder),
+		broker:        broker,
+		store:         store,
+		orderStore:    orderStore,
+		positionStore: positionStore,
+		logger:        slog.Default(),
+		trades:        make(map[string]*ManagedTrade),
+		orders:        make(map[string]*KiteOrder),
+		positions:     make(map[string]*KitePosition),
 	}
 
 	if store != nil {
@@ -68,6 +76,19 @@ func NewManagerWithStores(broker Broker, store Store, orderStore OrderStore) (*M
 				continue
 			}
 			manager.orders[order.OrderID] = cloneKiteOrder(order)
+		}
+	}
+
+	if positionStore != nil {
+		positions, err := positionStore.LoadPositions()
+		if err != nil {
+			return nil, err
+		}
+		for _, position := range positions {
+			if position == nil {
+				continue
+			}
+			manager.positions[positionKey(position.Exchange, position.TradingSymbol, position.Product)] = cloneKitePosition(position)
 		}
 	}
 
@@ -604,19 +625,37 @@ func (m *Manager) ListSyncedOrders() []*KiteOrder {
 	return out
 }
 
+func (m *Manager) ListSyncedPositions() []*KitePosition {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]*KitePosition, 0, len(m.positions))
+	for _, position := range m.positions {
+		out = append(out, cloneKitePosition(position))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return positionKey(out[i].Exchange, out[i].TradingSymbol, out[i].Product) < positionKey(out[j].Exchange, out[j].TradingSymbol, out[j].Product)
+	})
+	return out
+}
+
 func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	orders, err := m.broker.Orders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	positions, err := m.broker.Positions(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	syncedAt := time.Now().UTC()
 	result := &SyncResult{SyncedAt: syncedAt}
-	next := make(map[string]*KiteOrder, len(orders))
+	nextOrders := make(map[string]*KiteOrder, len(orders))
 	for _, order := range orders {
 		order.SyncedAt = syncedAt
 		order.CreationSource = creationSourceFromTag(order.Tag)
-		next[order.OrderID] = cloneKiteOrder(&order)
+		nextOrders[order.OrderID] = cloneKiteOrder(&order)
 		result.OrdersSynced++
 		if order.CreationSource == CreationSourceLocalSystem {
 			result.LocalSystemOrders++
@@ -624,11 +663,27 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 			result.ExternalOrders++
 		}
 	}
+	nextPositions := make(map[string]*KitePosition, len(positions))
+	for _, position := range positions {
+		syncedPosition := &KitePosition{
+			Exchange:      position.Exchange,
+			TradingSymbol: position.TradingSymbol,
+			Product:       position.Product,
+			Quantity:      position.Quantity,
+			SyncedAt:      syncedAt,
+		}
+		nextPositions[positionKey(position.Exchange, position.TradingSymbol, position.Product)] = syncedPosition
+		result.PositionsSynced++
+	}
 
 	m.mu.Lock()
-	m.orders = next
+	m.orders = nextOrders
+	m.positions = nextPositions
 	m.mu.Unlock()
 	if err := m.persistOrders(); err != nil {
+		return nil, err
+	}
+	if err := m.persistPositions(); err != nil {
 		return nil, err
 	}
 
@@ -636,6 +691,7 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 		m.logger.InfoContext(ctx, "kite_orders_synced",
 			"request_id", observability.RequestID(ctx),
 			"orders_synced", result.OrdersSynced,
+			"positions_synced", result.PositionsSynced,
 			"local_system_orders", result.LocalSystemOrders,
 			"external_orders", result.ExternalOrders,
 		)
@@ -872,6 +928,13 @@ func (m *Manager) persistOrders() error {
 		return nil
 	}
 	return m.orderStore.SaveOrders(m.ListSyncedOrders())
+}
+
+func (m *Manager) persistPositions() error {
+	if m.positionStore == nil {
+		return nil
+	}
+	return m.positionStore.SavePositions(m.ListSyncedPositions())
 }
 
 func (m *Manager) setEntryPriceIfMissing(id string, entryPrice float64) error {
@@ -1178,6 +1241,10 @@ func positionGroupID(exchange, symbol, product string) string {
 	return strings.ToUpper(exchange) + ":" + strings.ToUpper(symbol) + ":" + strings.ToUpper(product)
 }
 
+func positionKey(exchange, symbol, product string) string {
+	return strings.ToUpper(exchange) + ":" + strings.ToUpper(symbol) + ":" + strings.ToUpper(product)
+}
+
 func appendUnique(values []string, value string) []string {
 	for _, existing := range values {
 		if existing == value {
@@ -1255,6 +1322,14 @@ func cloneKiteOrder(order *KiteOrder) *KiteOrder {
 		return nil
 	}
 	copy := *order
+	return &copy
+}
+
+func cloneKitePosition(position *KitePosition) *KitePosition {
+	if position == nil {
+		return nil
+	}
+	copy := *position
 	return &copy
 }
 

@@ -323,13 +323,14 @@ func TestSyncKiteOrdersInfersCreationSource(t *testing.T) {
 			Tag:             "OTHER",
 		},
 	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
 	manager := NewManager(broker)
 
 	result, err := manager.SyncKite(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.OrdersSynced != 3 || result.LocalSystemOrders != 1 || result.ExternalOrders != 2 {
+	if result.OrdersSynced != 3 || result.PositionsSynced != 1 || result.LocalSystemOrders != 1 || result.ExternalOrders != 2 {
 		t.Fatalf("unexpected sync result: %+v", result)
 	}
 
@@ -352,6 +353,10 @@ func TestSyncKiteOrdersInfersCreationSource(t *testing.T) {
 	}
 	if sources["other-1"] != CreationSourceUnknown {
 		t.Fatalf("expected unknown source, got %q", sources["other-1"])
+	}
+	positions := manager.ListSyncedPositions()
+	if len(positions) != 1 || positions[0].TradingSymbol != "INFY" || positions[0].Quantity != 1 {
+		t.Fatalf("unexpected synced positions: %+v", positions)
 	}
 }
 
@@ -1271,6 +1276,31 @@ func TestJSONOrderStorePersistsAndReloadsSyncedOrders(t *testing.T) {
 	}
 }
 
+func TestJSONPositionStorePersistsAndReloadsSyncedPositions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trades.json")
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 2}}
+	manager, err := NewManagerWithAllStores(broker, NewJSONStore(path), NewJSONOrderStore(path), NewJSONPositionStore(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewManagerWithAllStores(newFakeBroker(), NewJSONStore(path), NewJSONOrderStore(path), NewJSONPositionStore(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := reloaded.ListSyncedPositions()
+	if len(positions) != 1 {
+		t.Fatalf("expected one reloaded position, got %d", len(positions))
+	}
+	if positions[0].TradingSymbol != "INFY" || positions[0].Quantity != 2 || positions[0].SyncedAt.IsZero() {
+		t.Fatalf("unexpected reloaded position %+v", positions[0])
+	}
+}
+
 func TestDailyStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
 	got := dailyStorePath("/tmp/trading-data", time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC))
 	want := filepath.Join("/tmp/trading-data", "trades_24_05_2026.json")
@@ -1294,6 +1324,20 @@ func TestDailyOrderStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
 	explicit := "/tmp/custom.json"
 	wantExplicit := "/tmp/custom_orders.json"
 	if got := dailyOrderStorePath(explicit, time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)); got != wantExplicit {
+		t.Fatalf("got %s want %s", got, wantExplicit)
+	}
+}
+
+func TestDailyPositionStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
+	got := dailyPositionStorePath("/tmp/trading-data", time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC))
+	want := filepath.Join("/tmp/trading-data", "positions_24_05_2026.json")
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
+	}
+
+	explicit := "/tmp/custom.json"
+	wantExplicit := "/tmp/custom_positions.json"
+	if got := dailyPositionStorePath(explicit, time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)); got != wantExplicit {
 		t.Fatalf("got %s want %s", got, wantExplicit)
 	}
 }

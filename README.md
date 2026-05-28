@@ -22,7 +22,7 @@ The server starts on `:8080` and uses the paper broker by default.
 curl http://localhost:8080/healthz
 ```
 
-Trades and synced orderbook snapshots are persisted date-wise by default, for example `data/trades_24_05_2026.json` and `data/orders_24_05_2026.json`, so local trade ids and the latest sync survive server restarts on the same trading day. Override the directory or exact trade file with:
+Trades, synced orderbook snapshots, and synced position snapshots are persisted date-wise by default, for example `data/trades_24_05_2026.json`, `data/orders_24_05_2026.json`, and `data/positions_24_05_2026.json`, so local trade ids and the latest sync survive server restarts on the same trading day. Override the directory or exact trade file with:
 
 ```bash
 export TRADE_STORE_PATH=/path/to/trading-data
@@ -38,7 +38,7 @@ Every request gets an `X-Request-ID`; pass your own or use the generated respons
 
 Orders created by this service are sent to Kite with tag `TSLOCAL`. This will be used by the sync engine to distinguish local-system orders from Kite app/manual orders.
 
-Use `POST /sync/kite` to fetch the latest Kite orderbook into memory, then `GET /orders` to view the synced snapshot with `creation_source`.
+Use `POST /sync/kite` to fetch the latest Kite orderbook and net positions, then `GET /orders` and `GET /positions` to view synced snapshots.
 
 ## Create a trade
 
