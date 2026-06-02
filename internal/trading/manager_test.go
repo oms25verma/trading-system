@@ -640,6 +640,70 @@ func TestSyncKiteDetectsProductConversionWithoutClosingTrade(t *testing.T) {
 	}
 }
 
+func TestApplyDetectedProductConversionRecreatesProtectionWithNewProduct(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "MCX",
+		TradingSymbol: "SILVERM26JUNFUT",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStopOrderID := trade.StopOrderID
+	oldTargetOrderID := trade.TargetOrderID
+
+	broker.positions = []Position{{Exchange: "MCX", TradingSymbol: "SILVERM26JUNFUT", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "MCX", TradingSymbol: "SILVERM26JUNFUT", Product: "NRML", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.ApplyDetectedProductConversion(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.Product != "NRML" {
+		t.Fatalf("expected NRML product, got %+v", trade)
+	}
+	if trade.StopOrderID == "" || trade.StopOrderID == oldStopOrderID || broker.orders[trade.StopOrderID].Product != "NRML" {
+		t.Fatalf("expected recreated NRML stop-loss, got %+v", trade)
+	}
+	if trade.TargetOrderID == "" || trade.TargetOrderID == oldTargetOrderID || broker.orders[trade.TargetOrderID].Product != "NRML" {
+		t.Fatalf("expected recreated NRML target, got %+v", trade)
+	}
+	if _, ok := broker.orders[oldStopOrderID]; ok {
+		t.Fatalf("expected old stop-loss order %s cancelled", oldStopOrderID)
+	}
+	if _, ok := broker.orders[oldTargetOrderID]; ok {
+		t.Fatalf("expected old target order %s cancelled", oldTargetOrderID)
+	}
+	if _, err := manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 125}); err != nil {
+		t.Fatalf("expected target modification after migration, got %v", err)
+	}
+	groups := manager.ListGroups()
+	if len(groups) != 1 || groups[0].Product != "NRML" || groups[0].ManagementStatus != ManagementStatusManaged {
+		t.Fatalf("expected migrated managed group, got %+v", groups)
+	}
+}
+
 func TestEnterWithOnlyStopLossAndOffset(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

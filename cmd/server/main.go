@@ -201,6 +201,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		trade, err := manager.Exit(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
 	})
+	mux.HandleFunc("POST /trades/{id}/product-conversion/apply", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.ApplyDetectedProductConversion(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
 	return mux
 }
 

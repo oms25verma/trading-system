@@ -612,6 +612,73 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	return result, nil
 }
 
+func (m *Manager) ApplyDetectedProductConversion(ctx context.Context, id string) (*ManagedTrade, error) {
+	trade, err := m.get(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
+		return nil, err
+	}
+
+	fromKey := positionKey(trade.Exchange, trade.TradingSymbol, trade.Product)
+	m.mu.RLock()
+	toKey, ok := m.productConversions[fromKey]
+	position := cloneKitePosition(m.positions[toKey])
+	m.mu.RUnlock()
+	if !ok || position == nil || position.Quantity == 0 {
+		return nil, conflictError("product_conversion_not_found", "no detected product conversion is available for this trade")
+	}
+	trades := m.openTradesForPosition(trade.Exchange, trade.TradingSymbol, trade.Product)
+	if len(trades) != 1 || trades[0].ID != trade.ID {
+		return nil, conflictError("ambiguous_product_conversion", "product conversion cannot be applied automatically because multiple open local trades share the old position group")
+	}
+
+	stopLoss := cloneStopLoss(trade.StopLoss)
+	target := cloneTarget(trade.Target)
+	if trade.StopOrderID != "" {
+		if _, err := m.RemoveStopLoss(ctx, trade.ID); err != nil {
+			return nil, err
+		}
+	}
+	if trade.TargetOrderID != "" {
+		if _, err := m.RemoveTarget(ctx, trade.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	m.mu.Lock()
+	current := m.trades[trade.ID]
+	current.Product = position.Product
+	current.Quantity = absInt(position.Quantity)
+	current.UpdatedAt = time.Now().UTC()
+	delete(m.productConversions, fromKey)
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	m.logTradeEvent(ctx, "trade_product_converted", result)
+
+	if stopLoss != nil {
+		result, err = m.AddStopLoss(ctx, trade.ID, StopLossRequest{
+			TriggerPrice: stopLoss.TriggerPrice,
+			LimitPrice:   stopLoss.LimitPrice,
+			TrailBy:      stopLoss.TrailBy,
+		})
+		if err != nil {
+			return result, err
+		}
+	}
+	if target != nil {
+		result, err = m.AddTarget(ctx, trade.ID, TargetRequest{Price: target.Price})
+		if err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
 func (m *Manager) List() []*ManagedTrade {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1680,6 +1747,22 @@ func cloneKitePosition(position *KitePosition) *KitePosition {
 		return nil
 	}
 	copy := *position
+	return &copy
+}
+
+func cloneStopLoss(stopLoss *StopLoss) *StopLoss {
+	if stopLoss == nil {
+		return nil
+	}
+	copy := *stopLoss
+	return &copy
+}
+
+func cloneTarget(target *Target) *Target {
+	if target == nil {
+		return nil
+	}
+	copy := *target
 	return &copy
 }
 

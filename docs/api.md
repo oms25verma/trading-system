@@ -148,6 +148,14 @@ For groups with multiple open child trades, the service does not guess how to al
 
 If sync detects a product conversion such as `MIS -> NRML`, the old and new groups include `PRODUCT_CONVERSION_DETECTED`, plus `converted_to_product` or `converted_from_product`. The local trade remains open, but add/modify SL, add/modify target, and exit actions using the stale product are rejected with `CONFLICT/product_conversion_detected` until product migration is implemented. Removing old protection orders remains allowed.
 
+For an unambiguous group with exactly one open local trade, apply the detected migration with:
+
+```http
+POST /trades/{id}/product-conversion/apply
+```
+
+This cancels old-product SL/target orders, updates the local trade product and remaining quantity, clears the stale-product guard, and recreates existing protection orders under the new product. Multi-trade conversion remains blocked until group-level allocation is available.
+
 ### Create Trade
 
 ```http
