@@ -14,15 +14,16 @@ import (
 )
 
 type Manager struct {
-	broker        Broker
-	store         Store
-	orderStore    OrderStore
-	positionStore PositionStore
-	logger        *slog.Logger
-	mu            sync.RWMutex
-	trades        map[string]*ManagedTrade
-	orders        map[string]*KiteOrder
-	positions     map[string]*KitePosition
+	broker          Broker
+	store           Store
+	orderStore      OrderStore
+	positionStore   PositionStore
+	logger          *slog.Logger
+	mu              sync.RWMutex
+	trades          map[string]*ManagedTrade
+	orders          map[string]*KiteOrder
+	positions       map[string]*KitePosition
+	positionsSynced bool
 }
 
 func NewManager(broker Broker) *Manager {
@@ -90,6 +91,7 @@ func NewManagerWithAllStores(broker Broker, store Store, orderStore OrderStore, 
 			}
 			manager.positions[positionKey(position.Exchange, position.TradingSymbol, position.Product)] = cloneKitePosition(position)
 		}
+		manager.positionsSynced = true
 	}
 
 	return manager, nil
@@ -677,8 +679,10 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	}
 
 	m.mu.Lock()
+	countPositionChanges(m.positions, nextPositions, result)
 	m.orders = nextOrders
 	m.positions = nextPositions
+	m.positionsSynced = true
 	m.mu.Unlock()
 	if err := m.persistOrders(); err != nil {
 		return nil, err
@@ -1204,19 +1208,22 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		group := groupsByID[groupID]
 		if group == nil {
 			group = &PositionGroup{
-				ID:            groupID,
-				Exchange:      strings.ToUpper(trade.Exchange),
-				TradingSymbol: strings.ToUpper(trade.TradingSymbol),
-				Product:       strings.ToUpper(trade.Product),
-				Side:          strings.ToUpper(trade.Side),
-				TradeStatus:   TradeStatusOpen,
-				CreatedAt:     trade.CreatedAt,
-				UpdatedAt:     trade.UpdatedAt,
+				ID:               groupID,
+				Exchange:         strings.ToUpper(trade.Exchange),
+				TradingSymbol:    strings.ToUpper(trade.TradingSymbol),
+				Product:          strings.ToUpper(trade.Product),
+				Side:             strings.ToUpper(trade.Side),
+				TradeStatus:      TradeStatusOpen,
+				CreationSource:   CreationSourceLocalSystem,
+				ManagementStatus: ManagementStatusManaged,
+				CreatedAt:        trade.CreatedAt,
+				UpdatedAt:        trade.UpdatedAt,
 			}
 			groupsByID[groupID] = group
 		}
 		group.TradeIDs = append(group.TradeIDs, trade.ID)
-		group.Quantity += trade.Quantity
+		group.LocalQuantity += trade.Quantity
+		group.Quantity = group.LocalQuantity
 		if trade.EntryPrice > 0 {
 			group.AverageEntryPrice += trade.EntryPrice * float64(trade.Quantity)
 		}
@@ -1228,11 +1235,58 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		}
 	}
 
+	for _, position := range m.positions {
+		if position.Quantity == 0 {
+			continue
+		}
+		groupID := positionGroupID(position.Exchange, position.TradingSymbol, position.Product)
+		group := groupsByID[groupID]
+		brokerQuantity := absInt(position.Quantity)
+		brokerSide := sideFromQuantity(position.Quantity)
+		if group == nil {
+			group = &PositionGroup{
+				ID:               groupID,
+				Exchange:         strings.ToUpper(position.Exchange),
+				TradingSymbol:    strings.ToUpper(position.TradingSymbol),
+				Product:          strings.ToUpper(position.Product),
+				Side:             brokerSide,
+				Quantity:         brokerQuantity,
+				BrokerQuantity:   brokerQuantity,
+				TradeStatus:      TradeStatusOpen,
+				CreationSource:   CreationSourceKiteApp,
+				ManagementStatus: ManagementStatusUnmanaged,
+				CreatedAt:        position.SyncedAt,
+				UpdatedAt:        position.SyncedAt,
+			}
+			groupsByID[groupID] = group
+			continue
+		}
+		group.BrokerQuantity = brokerQuantity
+		group.Quantity = brokerQuantity
+		if brokerSide != group.Side {
+			group.Warnings = appendUnique(group.Warnings, WarningPositionQuantityMismatch)
+			group.ManagementStatus = ManagementStatusPartiallyManaged
+		} else if brokerQuantity < group.LocalQuantity {
+			group.Warnings = appendUnique(group.Warnings, WarningPartialExternalExit)
+			group.ManagementStatus = ManagementStatusPartiallyManaged
+		} else if brokerQuantity > group.LocalQuantity {
+			group.Warnings = appendUnique(group.Warnings, WarningPositionQuantityMismatch)
+			group.ManagementStatus = ManagementStatusPartiallyManaged
+		}
+		if position.SyncedAt.After(group.UpdatedAt) {
+			group.UpdatedAt = position.SyncedAt
+		}
+	}
+
 	groups := make([]*PositionGroup, 0, len(groupsByID))
 	for _, group := range groupsByID {
+		if m.positionsSynced && group.CreationSource == CreationSourceLocalSystem && group.BrokerQuantity == 0 {
+			group.Warnings = appendUnique(group.Warnings, WarningPositionMissingFromBroker)
+			group.ManagementStatus = ManagementStatusPartiallyManaged
+		}
 		sort.Strings(group.TradeIDs)
-		if group.Quantity > 0 && group.AverageEntryPrice > 0 {
-			group.AverageEntryPrice = group.AverageEntryPrice / float64(group.Quantity)
+		if group.LocalQuantity > 0 && group.AverageEntryPrice > 0 {
+			group.AverageEntryPrice = group.AverageEntryPrice / float64(group.LocalQuantity)
 		}
 		groups = append(groups, group)
 	}
@@ -1255,7 +1309,7 @@ func addCrossProductExposureWarnings(groups []*PositionGroup) {
 			if group.Product == other.Product || group.Side == other.Side {
 				continue
 			}
-			group.Warnings = appendUnique(group.Warnings, "OPPOSITE_EXPOSURE_ACROSS_PRODUCTS")
+			group.Warnings = appendUnique(group.Warnings, WarningOppositeExposureAcrossProducts)
 		}
 	}
 }
@@ -1266,6 +1320,38 @@ func positionGroupID(exchange, symbol, product string) string {
 
 func positionKey(exchange, symbol, product string) string {
 	return strings.ToUpper(exchange) + ":" + strings.ToUpper(symbol) + ":" + strings.ToUpper(product)
+}
+
+func countPositionChanges(previous, next map[string]*KitePosition, result *SyncResult) {
+	for key, position := range next {
+		old, ok := previous[key]
+		if !ok {
+			result.PositionsAdded++
+			continue
+		}
+		if old.Quantity != position.Quantity {
+			result.PositionsChanged++
+		}
+	}
+	for key := range previous {
+		if _, ok := next[key]; !ok {
+			result.PositionsRemoved++
+		}
+	}
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func sideFromQuantity(quantity int) string {
+	if quantity < 0 {
+		return "SELL"
+	}
+	return "BUY"
 }
 
 func appendUnique(values []string, value string) []string {

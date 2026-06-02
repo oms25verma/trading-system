@@ -402,6 +402,77 @@ func TestListGroupsWarnsForOppositeExposureAcrossProducts(t *testing.T) {
 	}
 }
 
+func TestSyncKiteCreatesUnmanagedGroupForExternalPosition(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 2}}
+	manager := NewManager(broker)
+
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PositionsAdded != 1 {
+		t.Fatalf("expected one added position, got %+v", result)
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected one group, got %d", len(groups))
+	}
+	group := groups[0]
+	if group.ID != "NSE:INFY:MIS" || group.Side != "BUY" || group.Quantity != 2 {
+		t.Fatalf("unexpected external group: %+v", group)
+	}
+	if group.CreationSource != CreationSourceKiteApp || group.ManagementStatus != ManagementStatusUnmanaged {
+		t.Fatalf("unexpected source/status: %+v", group)
+	}
+}
+
+func TestSyncKiteMarksPartialExternalExitOnManagedGroup(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      3,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 3}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PositionsChanged != 1 {
+		t.Fatalf("expected one changed position, got %+v", result)
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected one group, got %d", len(groups))
+	}
+	group := groups[0]
+	if group.Quantity != 1 || group.LocalQuantity != 3 || group.BrokerQuantity != 1 {
+		t.Fatalf("unexpected quantities: %+v", group)
+	}
+	if group.ManagementStatus != ManagementStatusPartiallyManaged {
+		t.Fatalf("expected partially managed group, got %+v", group)
+	}
+	if len(group.Warnings) != 1 || group.Warnings[0] != WarningPartialExternalExit {
+		t.Fatalf("expected partial exit warning, got %+v", group.Warnings)
+	}
+}
+
 func TestEnterWithOnlyStopLossAndOffset(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

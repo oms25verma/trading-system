@@ -72,7 +72,7 @@ Use the returned `id` in the next calls.
 
 Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit APIs.
 
-Use `GET /groups` to see active position groups aggregated by `exchange + tradingsymbol + product`. The service now rejects a new opposite-side entry when an active group already exists for the same key; use the exit flow for reducing/closing that position. Opposite exposure across products for the same symbol is allowed for now but appears in group `warnings`.
+Use `GET /groups` to see active position groups aggregated by `exchange + tradingsymbol + product`. Groups merge local trades with synced Kite net positions, so Kite-only positions appear as `UNMANAGED` and quantity mismatches appear as `PARTIALLY_MANAGED` warnings. The service rejects a new opposite-side entry when an active group already exists for the same key; use the exit flow for reducing/closing that position.
 
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 

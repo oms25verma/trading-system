@@ -60,6 +60,9 @@ This endpoint is always available as a force refresh. Automatic background sync 
   "synced_at": "2026-05-28T10:00:00Z",
   "orders_synced": 3,
   "positions_synced": 2,
+  "positions_added": 1,
+  "positions_changed": 1,
+  "positions_removed": 0,
   "local_system_orders": 1,
   "external_orders": 2
 }
@@ -103,7 +106,7 @@ GET /trades
 GET /groups
 ```
 
-Groups are currently derived from open local trades and keyed by `exchange + tradingsymbol + product`.
+Groups merge open local trades with the latest synced Kite net positions and are keyed by `exchange + tradingsymbol + product`. Synced Kite-only positions appear as `UNMANAGED` so the UI can surface them before local SL/target management is added.
 
 Example response:
 
@@ -116,9 +119,13 @@ Example response:
     "product": "MIS",
     "side": "SELL",
     "quantity": 2,
+    "local_quantity": 2,
+    "broker_quantity": 2,
     "average_entry_price": 109000,
     "trade_ids": ["silverm26junfut-..."],
     "trade_status": "OPEN",
+    "creation_source": "LOCAL_SYSTEM",
+    "management_status": "MANAGED",
     "warnings": ["OPPOSITE_EXPOSURE_ACROSS_PRODUCTS"],
     "created_at": "2026-05-24T09:15:00Z",
     "updated_at": "2026-05-24T09:16:00Z"
@@ -129,6 +136,8 @@ Example response:
 Creating a new opposite-side entry for an active group is rejected with `CONFLICT/opposite_side_active_group`; use the exit flow to reduce or close the existing position.
 
 If the same symbol has opposite exposure across different products, for example `BUY MIS` and `SELL NRML`, groups include `OPPOSITE_EXPOSURE_ACROSS_PRODUCTS` in `warnings`.
+
+If synced broker quantity differs from local child-trade quantity, broker quantity is shown as the active group `quantity`, `management_status` becomes `PARTIALLY_MANAGED`, and warnings identify partial external exits or other mismatches.
 
 ### Create Trade
 
