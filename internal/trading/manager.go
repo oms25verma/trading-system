@@ -679,6 +679,77 @@ func (m *Manager) ApplyDetectedProductConversion(ctx context.Context, id string)
 	return result, nil
 }
 
+func (m *Manager) AddGroupStopLoss(ctx context.Context, groupID string, req StopLossRequest) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.AddStopLoss(ctx, trade.ID, req)
+}
+
+func (m *Manager) RemoveGroupStopLoss(ctx context.Context, groupID string) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.RemoveStopLoss(ctx, trade.ID)
+}
+
+func (m *Manager) AddGroupTarget(ctx context.Context, groupID string, req TargetRequest) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.AddTarget(ctx, trade.ID, req)
+}
+
+func (m *Manager) RemoveGroupTarget(ctx context.Context, groupID string) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.RemoveTarget(ctx, trade.ID)
+}
+
+func (m *Manager) ExitGroup(ctx context.Context, groupID string) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.Exit(ctx, trade.ID)
+}
+
+func (m *Manager) singleManagedTradeForGroup(groupID string) (*ManagedTrade, error) {
+	groupID = strings.ToUpper(groupID)
+
+	m.mu.RLock()
+	var group *PositionGroup
+	for _, candidate := range m.positionGroupsLocked() {
+		if candidate.ID == groupID {
+			group = candidate
+			break
+		}
+	}
+	if group == nil {
+		m.mu.RUnlock()
+		return nil, notFoundError("group_not_found", "position group not found")
+	}
+	if len(group.TradeIDs) == 0 {
+		m.mu.RUnlock()
+		return nil, conflictError("group_unmanaged", "position group has no linked local trade; take over management before performing this action")
+	}
+	if len(group.TradeIDs) != 1 {
+		m.mu.RUnlock()
+		return nil, conflictError("ambiguous_group_trades", "position group has multiple open local trades; group-level allocation is required before performing this action")
+	}
+	trade := cloneTrade(m.trades[group.TradeIDs[0]])
+	m.mu.RUnlock()
+	if trade == nil {
+		return nil, notFoundError("trade_not_found", "linked local trade not found")
+	}
+	return trade, nil
+}
+
 func (m *Manager) List() []*ManagedTrade {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

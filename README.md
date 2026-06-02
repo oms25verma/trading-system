@@ -78,6 +78,8 @@ For a group with exactly one open local trade, sync reconciliation automatically
 
 Sync also detects unambiguous product conversions such as `MIS -> NRML`. Converted groups are flagged, and stale-product SL/target/exit actions are blocked until you call `POST /trades/{id}/product-conversion/apply`. For a single-trade group, that endpoint migrates the local product and recreates existing protection orders under the new product.
 
+For a managed group with one linked local trade, UI actions can use `/groups/{id}/stop-loss`, `/groups/{id}/target`, and `/groups/{id}/exit`. External-only and multi-trade groups return explicit conflicts until take-over and group-allocation workflows are added.
+
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 
 ```text

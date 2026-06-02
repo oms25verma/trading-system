@@ -156,6 +156,22 @@ POST /trades/{id}/product-conversion/apply
 
 This cancels old-product SL/target orders, updates the local trade product and remaining quantity, clears the stale-product guard, and recreates existing protection orders under the new product. Multi-trade conversion remains blocked until group-level allocation is available.
 
+### Group Actions
+
+For a managed group with exactly one open linked local trade, the UI can use group ids such as `NSE:INFY:MIS`:
+
+```http
+POST   /groups/{id}/stop-loss
+DELETE /groups/{id}/stop-loss
+POST   /groups/{id}/target
+DELETE /groups/{id}/target
+POST   /groups/{id}/exit
+```
+
+Request bodies match the equivalent trade-level APIs. These endpoints delegate to the existing validated trade workflow.
+
+External-only groups return `CONFLICT/group_unmanaged`. Groups with multiple open local child trades return `CONFLICT/ambiguous_group_trades` until take-over and group-allocation logic is implemented.
+
 ### Create Trade
 
 ```http

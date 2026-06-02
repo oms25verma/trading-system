@@ -704,6 +704,101 @@ func TestApplyDetectedProductConversionRecreatesProtectionWithNewProduct(t *test
 	}
 }
 
+func TestGroupActionsDelegateToSingleManagedTrade(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.AddGroupStopLoss(context.Background(), "nse:infy:mis", StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID == "" {
+		t.Fatal("expected group stop-loss")
+	}
+	trade, err = manager.AddGroupTarget(context.Background(), "NSE:INFY:MIS", TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TargetOrderID == "" {
+		t.Fatal("expected group target")
+	}
+	trade, err = manager.RemoveGroupStopLoss(context.Background(), "NSE:INFY:MIS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID != "" {
+		t.Fatalf("expected group stop-loss removal, got %+v", trade)
+	}
+	trade, err = manager.RemoveGroupTarget(context.Background(), "NSE:INFY:MIS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TargetOrderID != "" {
+		t.Fatalf("expected group target removal, got %+v", trade)
+	}
+	trade, err = manager.ExitGroup(context.Background(), "NSE:INFY:MIS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonManual {
+		t.Fatalf("expected group exit, got %+v", trade)
+	}
+}
+
+func TestGroupActionRejectsUnmanagedExternalPosition(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.AddGroupTarget(context.Background(), "NSE:INFY:MIS", TargetRequest{Price: 120})
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "group_unmanaged" {
+		t.Fatalf("expected group_unmanaged, got %v", err)
+	}
+}
+
+func TestGroupActionRejectsMultipleLocalTrades(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	for _, id := range []string{"t1", "t2"} {
+		_, err := manager.Import(context.Background(), ImportTradeRequest{
+			ID:            id,
+			Exchange:      "NSE",
+			TradingSymbol: "INFY",
+			Side:          "BUY",
+			Quantity:      1,
+			Product:       "MIS",
+			EntryPrice:    100,
+			EntryOrderID:  "kite-" + id,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := manager.ExitGroup(context.Background(), "NSE:INFY:MIS")
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "ambiguous_group_trades" {
+		t.Fatalf("expected ambiguous_group_trades, got %v", err)
+	}
+}
+
 func TestEnterWithOnlyStopLossAndOffset(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

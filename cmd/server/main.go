@@ -205,6 +205,34 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		trade, err := manager.ApplyDetectedProductConversion(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
 	})
+	mux.HandleFunc("POST /groups/{id}/stop-loss", func(w http.ResponseWriter, r *http.Request) {
+		var req trading.StopLossRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		trade, err := manager.AddGroupStopLoss(r.Context(), r.PathValue("id"), req)
+		writeResult(r.Context(), w, trade, err)
+	})
+	mux.HandleFunc("DELETE /groups/{id}/stop-loss", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.RemoveGroupStopLoss(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
+	mux.HandleFunc("POST /groups/{id}/target", func(w http.ResponseWriter, r *http.Request) {
+		var req trading.TargetRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		trade, err := manager.AddGroupTarget(r.Context(), r.PathValue("id"), req)
+		writeResult(r.Context(), w, trade, err)
+	})
+	mux.HandleFunc("DELETE /groups/{id}/target", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.RemoveGroupTarget(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
+	mux.HandleFunc("POST /groups/{id}/exit", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.ExitGroup(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
 	return mux
 }
 
