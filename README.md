@@ -74,6 +74,8 @@ Use the local `id`, not Kite's `entry_order_id`, for stop-loss, target, and exit
 
 Use `GET /groups` to see active position groups aggregated by `exchange + tradingsymbol + product`. Groups merge local trades with synced Kite net positions, so Kite-only positions appear as `UNMANAGED` and quantity mismatches appear as `PARTIALLY_MANAGED` warnings. The service rejects a new opposite-side entry when an active group already exists for the same key; use the exit flow for reducing/closing that position.
 
+For a group with exactly one open local trade, sync reconciliation automatically closes the trade after an external flatten or reduces its remaining quantity after a partial external exit. Existing SL/target order quantities are resized for the remaining position. Multi-trade partial allocation is intentionally left for the group-management layer.
+
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 
 ```text

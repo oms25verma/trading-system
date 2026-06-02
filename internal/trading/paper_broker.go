@@ -60,6 +60,9 @@ func (p *PaperBroker) ModifyOrder(_ context.Context, _ string, orderID string, f
 	if trigger, ok := fields["trigger_price"]; ok {
 		order.TriggerPrice, _ = strconv.ParseFloat(trigger, 64)
 	}
+	if quantity, ok := fields["quantity"]; ok {
+		order.Quantity, _ = strconv.Atoi(quantity)
+	}
 	p.orders[orderID] = order
 	return nil
 }

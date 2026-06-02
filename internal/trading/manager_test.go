@@ -58,6 +58,9 @@ func (f *fakeBroker) ModifyOrder(_ context.Context, _ string, orderID string, fi
 	if value := fields["trigger_price"]; value != "" {
 		order.TriggerPrice, _ = strconv.ParseFloat(value, 64)
 	}
+	if value := fields["quantity"]; value != "" {
+		order.Quantity, _ = strconv.Atoi(value)
+	}
 	f.orders[orderID] = order
 	return nil
 }
@@ -428,10 +431,10 @@ func TestSyncKiteCreatesUnmanagedGroupForExternalPosition(t *testing.T) {
 	}
 }
 
-func TestSyncKiteMarksPartialExternalExitOnManagedGroup(t *testing.T) {
+func TestSyncKiteAppliesPartialExternalExitToSingleManagedTrade(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
-	_, err := manager.Import(context.Background(), ImportTradeRequest{
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
 		ID:            "t1",
 		Exchange:      "NSE",
 		TradingSymbol: "INFY",
@@ -441,6 +444,14 @@ func TestSyncKiteMarksPartialExternalExitOnManagedGroup(t *testing.T) {
 		EntryPrice:    100,
 		EntryOrderID:  "kite-1",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,20 +467,107 @@ func TestSyncKiteMarksPartialExternalExitOnManagedGroup(t *testing.T) {
 	if result.PositionsChanged != 1 {
 		t.Fatalf("expected one changed position, got %+v", result)
 	}
+	trades := manager.List()
+	if len(trades) != 1 || trades[0].Quantity != 1 || trades[0].InitialQuantity != 3 {
+		t.Fatalf("expected remaining quantity 1 and initial quantity 3, got %+v", trades)
+	}
+	if broker.orders[trade.StopOrderID].Quantity != 1 || broker.orders[trade.TargetOrderID].Quantity != 1 {
+		t.Fatalf("expected protection resized to 1, got stop=%+v target=%+v", broker.orders[trade.StopOrderID], broker.orders[trade.TargetOrderID])
+	}
 
 	groups := manager.ListGroups()
 	if len(groups) != 1 {
 		t.Fatalf("expected one group, got %d", len(groups))
 	}
 	group := groups[0]
-	if group.Quantity != 1 || group.LocalQuantity != 3 || group.BrokerQuantity != 1 {
+	if group.Quantity != 1 || group.LocalQuantity != 1 || group.BrokerQuantity != 1 {
 		t.Fatalf("unexpected quantities: %+v", group)
 	}
-	if group.ManagementStatus != ManagementStatusPartiallyManaged {
-		t.Fatalf("expected partially managed group, got %+v", group)
+	if group.ManagementStatus != ManagementStatusManaged || len(group.Warnings) != 0 {
+		t.Fatalf("expected reconciled managed group, got %+v", group)
 	}
-	if len(group.Warnings) != 1 || group.Warnings[0] != WarningPartialExternalExit {
-		t.Fatalf("expected partial exit warning, got %+v", group.Warnings)
+}
+
+func TestSyncKiteClosesSingleManagedTradeAfterExternalFlatten(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = nil
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PositionsRemoved != 1 {
+		t.Fatalf("expected one removed position, got %+v", result)
+	}
+
+	trades := manager.List()
+	if len(trades) != 1 || trades[0].TradeStatus != TradeStatusClosed || trades[0].ExitReason != ExitReasonManualExternal {
+		t.Fatalf("expected external close, got %+v", trades)
+	}
+	if broker.cancelCount != 2 {
+		t.Fatalf("expected stop-loss and target cancellation, got %d", broker.cancelCount)
+	}
+}
+
+func TestSyncKiteDoesNotAllocatePartialExitAcrossMultipleTrades(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	for _, id := range []string{"t1", "t2"} {
+		_, err := manager.Import(context.Background(), ImportTradeRequest{
+			ID:            id,
+			Exchange:      "NSE",
+			TradingSymbol: "INFY",
+			Side:          "BUY",
+			Quantity:      1,
+			Product:       "MIS",
+			EntryPrice:    100,
+			EntryOrderID:  "kite-" + id,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 2}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	trades := manager.List()
+	if len(trades) != 2 || trades[0].Quantity != 1 || trades[1].Quantity != 1 {
+		t.Fatalf("expected ambiguous trades to remain unchanged, got %+v", trades)
+	}
+	groups := manager.ListGroups()
+	if len(groups) != 1 || groups[0].ManagementStatus != ManagementStatusPartiallyManaged {
+		t.Fatalf("expected partially managed group, got %+v", groups)
 	}
 }
 

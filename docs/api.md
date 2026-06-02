@@ -139,6 +139,13 @@ If the same symbol has opposite exposure across different products, for example 
 
 If synced broker quantity differs from local child-trade quantity, broker quantity is shown as the active group `quantity`, `management_status` becomes `PARTIALLY_MANAGED`, and warnings identify partial external exits or other mismatches.
 
+For an unambiguous group with exactly one open local trade, sync reconciliation applies external changes automatically:
+
+- full external flatten: cancel remaining SL/target orders and close the local trade with `MANUAL_EXTERNAL`
+- partial external exit: reduce local remaining `quantity`, preserve `initial_quantity`, and resize remaining SL/target order quantities
+
+For groups with multiple open child trades, the service does not guess how to allocate a partial external exit. The group remains `PARTIALLY_MANAGED` until group-level allocation logic is added.
+
 ### Create Trade
 
 ```http

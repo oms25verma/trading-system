@@ -63,6 +63,9 @@ func NewManagerWithAllStores(broker Broker, store Store, orderStore OrderStore, 
 			if trade.TradeStatus == "" {
 				trade.TradeStatus = TradeStatusOpen
 			}
+			if trade.InitialQuantity == 0 {
+				trade.InitialQuantity = trade.Quantity
+			}
 			manager.trades[trade.ID] = cloneTrade(trade)
 		}
 	}
@@ -167,18 +170,19 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 	}
 
 	trade := &ManagedTrade{
-		ID:            fmt.Sprintf("%s-%d", strings.ToLower(req.TradingSymbol), now.UnixNano()),
-		Exchange:      req.Exchange,
-		TradingSymbol: req.TradingSymbol,
-		Side:          side,
-		Quantity:      req.Quantity,
-		Product:       valueOr(req.Product, "MIS"),
-		EntryPrice:    initialEntryPrice(req),
-		EntryOrderID:  orderID,
-		EntryStatus:   initialEntryStatus(req),
-		TradeStatus:   TradeStatusOpen,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:              fmt.Sprintf("%s-%d", strings.ToLower(req.TradingSymbol), now.UnixNano()),
+		Exchange:        req.Exchange,
+		TradingSymbol:   req.TradingSymbol,
+		Side:            side,
+		Quantity:        req.Quantity,
+		InitialQuantity: req.Quantity,
+		Product:         valueOr(req.Product, "MIS"),
+		EntryPrice:      initialEntryPrice(req),
+		EntryOrderID:    orderID,
+		EntryStatus:     initialEntryStatus(req),
+		TradeStatus:     TradeStatusOpen,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if req.Protection != nil && shouldDeferProtection(req) {
 		trade.PendingProtection = pendingProtection(*req.Protection)
@@ -225,18 +229,19 @@ func (m *Manager) Import(ctx context.Context, req ImportTradeRequest) (*ManagedT
 		id = fmt.Sprintf("%s-%d", strings.ToLower(req.TradingSymbol), now.UnixNano())
 	}
 	trade := &ManagedTrade{
-		ID:            id,
-		Exchange:      req.Exchange,
-		TradingSymbol: req.TradingSymbol,
-		Side:          side,
-		Quantity:      req.Quantity,
-		Product:       valueOr(req.Product, "MIS"),
-		EntryPrice:    req.EntryPrice,
-		EntryOrderID:  req.EntryOrderID,
-		EntryStatus:   OrderStatusComplete,
-		TradeStatus:   TradeStatusOpen,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:              id,
+		Exchange:        req.Exchange,
+		TradingSymbol:   req.TradingSymbol,
+		Side:            side,
+		Quantity:        req.Quantity,
+		InitialQuantity: req.Quantity,
+		Product:         valueOr(req.Product, "MIS"),
+		EntryPrice:      req.EntryPrice,
+		EntryOrderID:    req.EntryOrderID,
+		EntryStatus:     OrderStatusComplete,
+		TradeStatus:     TradeStatusOpen,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	m.mu.Lock()
@@ -679,11 +684,13 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	}
 
 	m.mu.Lock()
+	previousPositions := m.positions
 	countPositionChanges(m.positions, nextPositions, result)
 	m.orders = nextOrders
 	m.positions = nextPositions
 	m.positionsSynced = true
 	m.mu.Unlock()
+	m.reconcileSyncedPositions(ctx, previousPositions, nextPositions)
 	if err := m.persistOrders(); err != nil {
 		return nil, err
 	}
@@ -724,6 +731,120 @@ func (m *Manager) SyncKiteLoop(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}
+}
+
+func (m *Manager) reconcileSyncedPositions(ctx context.Context, previous, next map[string]*KitePosition) {
+	for key, oldPosition := range previous {
+		if oldPosition == nil || oldPosition.Quantity == 0 {
+			continue
+		}
+		newPosition := next[key]
+		newQuantity := 0
+		if newPosition != nil {
+			newQuantity = newPosition.Quantity
+		}
+		if newQuantity == oldPosition.Quantity {
+			continue
+		}
+
+		trades := m.openTradesForPosition(oldPosition.Exchange, oldPosition.TradingSymbol, oldPosition.Product)
+		if len(trades) != 1 {
+			m.logPositionReconciliationSkipped(ctx, oldPosition, len(trades))
+			continue
+		}
+		trade := trades[0]
+		switch {
+		case newQuantity == 0:
+			m.closeExternallyFlattenedTrade(ctx, trade)
+		case sameSignedQuantity(oldPosition.Quantity, newQuantity) && absInt(newQuantity) < absInt(oldPosition.Quantity):
+			m.reduceExternallyClosedTrade(ctx, trade, absInt(newQuantity))
+		}
+	}
+}
+
+func (m *Manager) openTradesForPosition(exchange, symbol, product string) []*ManagedTrade {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var trades []*ManagedTrade
+	for _, trade := range m.trades {
+		if isTradeClosed(trade) || !samePositionGroup(trade.Exchange, trade.TradingSymbol, trade.Product, exchange, symbol, product) {
+			continue
+		}
+		trades = append(trades, cloneTrade(trade))
+	}
+	return trades
+}
+
+func (m *Manager) closeExternallyFlattenedTrade(ctx context.Context, trade *ManagedTrade) {
+	stopStatus := trade.StopOrderStatus
+	if trade.StopOrderID != "" && !isTerminalOrderStatus(stopStatus) {
+		if err := m.broker.CancelOrder(ctx, "regular", trade.StopOrderID); err == nil {
+			stopStatus = OrderStatusCancelled
+		}
+	}
+	targetStatus := trade.TargetOrderStatus
+	if trade.TargetOrderID != "" && !isTerminalOrderStatus(targetStatus) {
+		if err := m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID); err == nil {
+			targetStatus = OrderStatusCancelled
+		}
+	}
+	_ = m.closeTrade(ctx, trade.ID, ExitReasonManualExternal, stopStatus, targetStatus)
+}
+
+func (m *Manager) reduceExternallyClosedTrade(ctx context.Context, trade *ManagedTrade, remainingQuantity int) {
+	if remainingQuantity <= 0 || remainingQuantity >= trade.Quantity {
+		return
+	}
+	fields := map[string]string{"quantity": strconv.Itoa(remainingQuantity)}
+	if trade.StopOrderID != "" && !isTerminalOrderStatus(trade.StopOrderStatus) {
+		if err := m.broker.ModifyOrder(ctx, "regular", trade.StopOrderID, fields); err != nil {
+			m.logPositionProtectionResizeFailed(ctx, trade, trade.StopOrderID, remainingQuantity, err)
+		}
+	}
+	if trade.TargetOrderID != "" && !isTerminalOrderStatus(trade.TargetOrderStatus) {
+		if err := m.broker.ModifyOrder(ctx, "regular", trade.TargetOrderID, fields); err != nil {
+			m.logPositionProtectionResizeFailed(ctx, trade, trade.TargetOrderID, remainingQuantity, err)
+		}
+	}
+
+	m.mu.Lock()
+	current := m.trades[trade.ID]
+	if current != nil && !isTradeClosed(current) {
+		current.Quantity = remainingQuantity
+		current.UpdatedAt = time.Now().UTC()
+	}
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	_ = m.persist()
+	m.logTradeEvent(ctx, "trade_partial_external_exit", result)
+}
+
+func (m *Manager) logPositionReconciliationSkipped(ctx context.Context, position *KitePosition, openTrades int) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.WarnContext(ctx, "position_reconciliation_skipped",
+		"request_id", observability.RequestID(ctx),
+		"exchange", position.Exchange,
+		"tradingsymbol", position.TradingSymbol,
+		"product", position.Product,
+		"open_trades", openTrades,
+		"reason", "position mapping is not unambiguous",
+	)
+}
+
+func (m *Manager) logPositionProtectionResizeFailed(ctx context.Context, trade *ManagedTrade, orderID string, quantity int, err error) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.WarnContext(ctx, "position_protection_resize_failed",
+		"request_id", observability.RequestID(ctx),
+		"trade_id", trade.ID,
+		"order_id", orderID,
+		"quantity", quantity,
+		"error", err,
+	)
 }
 
 func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
@@ -1354,6 +1475,10 @@ func sideFromQuantity(quantity int) string {
 	return "BUY"
 }
 
+func sameSignedQuantity(left, right int) bool {
+	return (left > 0 && right > 0) || (left < 0 && right < 0)
+}
+
 func appendUnique(values []string, value string) []string {
 	for _, existing := range values {
 		if existing == value {
@@ -1398,6 +1523,9 @@ func (m *Manager) logTradeEvent(ctx context.Context, event string, trade *Manage
 }
 
 func cloneTrade(trade *ManagedTrade) *ManagedTrade {
+	if trade == nil {
+		return nil
+	}
 	copy := *trade
 	if trade.StopLoss != nil {
 		sl := *trade.StopLoss
