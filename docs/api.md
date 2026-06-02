@@ -146,6 +146,8 @@ For an unambiguous group with exactly one open local trade, sync reconciliation 
 
 For groups with multiple open child trades, the service does not guess how to allocate a partial external exit. The group remains `PARTIALLY_MANAGED` until group-level allocation logic is added.
 
+If sync detects a product conversion such as `MIS -> NRML`, the old and new groups include `PRODUCT_CONVERSION_DETECTED`, plus `converted_to_product` or `converted_from_product`. The local trade remains open, but add/modify SL, add/modify target, and exit actions using the stale product are rejected with `CONFLICT/product_conversion_detected` until product migration is implemented. Removing old protection orders remains allowed.
+
 ### Create Trade
 
 ```http

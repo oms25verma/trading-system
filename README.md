@@ -76,6 +76,8 @@ Use `GET /groups` to see active position groups aggregated by `exchange + tradin
 
 For a group with exactly one open local trade, sync reconciliation automatically closes the trade after an external flatten or reduces its remaining quantity after a partial external exit. Existing SL/target order quantities are resized for the remaining position. Multi-trade partial allocation is intentionally left for the group-management layer.
 
+Sync also detects unambiguous product conversions such as `MIS -> NRML`. Converted groups are flagged, and stale-product SL/target/exit actions are blocked until the protection migration workflow is implemented.
+
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 
 ```text

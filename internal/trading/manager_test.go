@@ -571,6 +571,75 @@ func TestSyncKiteDoesNotAllocatePartialExitAcrossMultipleTrades(t *testing.T) {
 	}
 }
 
+func TestSyncKiteDetectsProductConversionWithoutClosingTrade(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "MCX",
+		TradingSymbol: "SILVERM26JUNFUT",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "MCX", TradingSymbol: "SILVERM26JUNFUT", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "MCX", TradingSymbol: "SILVERM26JUNFUT", Product: "NRML", Quantity: 1}}
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ProductConversionsDetected != 1 {
+		t.Fatalf("expected one conversion, got %+v", result)
+	}
+	if manager.List()[0].TradeStatus != TradeStatusOpen {
+		t.Fatalf("expected trade to remain open after conversion detection, got %+v", manager.List()[0])
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 2 {
+		t.Fatalf("expected old and converted groups, got %+v", groups)
+	}
+	var oldGroup, newGroup *PositionGroup
+	for _, group := range groups {
+		switch group.Product {
+		case "MIS":
+			oldGroup = group
+		case "NRML":
+			newGroup = group
+		}
+	}
+	if oldGroup == nil || oldGroup.ConvertedToProduct != "NRML" || !contains(oldGroup.Warnings, WarningProductConversionDetected) {
+		t.Fatalf("expected old group conversion warning, got %+v", oldGroup)
+	}
+	if newGroup == nil || newGroup.ConvertedFromProduct != "MIS" || !contains(newGroup.Warnings, WarningProductConversionDetected) {
+		t.Fatalf("expected new group conversion warning, got %+v", newGroup)
+	}
+
+	if _, err := manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120}); err == nil {
+		t.Fatal("expected stale-product target action to fail")
+	} else {
+		var domainErr *DomainError
+		if !errors.As(err, &domainErr) || domainErr.Code != "product_conversion_detected" {
+			t.Fatalf("expected product_conversion_detected, got %v", err)
+		}
+	}
+
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Exit(context.Background(), trade.ID); err == nil {
+		t.Fatal("expected conversion guard to survive later sync")
+	}
+}
+
 func TestEnterWithOnlyStopLossAndOffset(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
@@ -1509,4 +1578,13 @@ func TestDailyPositionStorePathUsesDateWhenDirectoryProvided(t *testing.T) {
 	if got := dailyPositionStorePath(explicit, time.Date(2026, 5, 24, 10, 0, 0, 0, time.UTC)); got != wantExplicit {
 		t.Fatalf("got %s want %s", got, wantExplicit)
 	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

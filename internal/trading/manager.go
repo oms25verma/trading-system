@@ -14,16 +14,17 @@ import (
 )
 
 type Manager struct {
-	broker          Broker
-	store           Store
-	orderStore      OrderStore
-	positionStore   PositionStore
-	logger          *slog.Logger
-	mu              sync.RWMutex
-	trades          map[string]*ManagedTrade
-	orders          map[string]*KiteOrder
-	positions       map[string]*KitePosition
-	positionsSynced bool
+	broker             Broker
+	store              Store
+	orderStore         OrderStore
+	positionStore      PositionStore
+	logger             *slog.Logger
+	mu                 sync.RWMutex
+	trades             map[string]*ManagedTrade
+	orders             map[string]*KiteOrder
+	positions          map[string]*KitePosition
+	positionsSynced    bool
+	productConversions map[string]string
 }
 
 func NewManager(broker Broker) *Manager {
@@ -41,14 +42,15 @@ func NewManagerWithStores(broker Broker, store Store, orderStore OrderStore) (*M
 
 func NewManagerWithAllStores(broker Broker, store Store, orderStore OrderStore, positionStore PositionStore) (*Manager, error) {
 	manager := &Manager{
-		broker:        broker,
-		store:         store,
-		orderStore:    orderStore,
-		positionStore: positionStore,
-		logger:        slog.Default(),
-		trades:        make(map[string]*ManagedTrade),
-		orders:        make(map[string]*KiteOrder),
-		positions:     make(map[string]*KitePosition),
+		broker:             broker,
+		store:              store,
+		orderStore:         orderStore,
+		positionStore:      positionStore,
+		logger:             slog.Default(),
+		trades:             make(map[string]*ManagedTrade),
+		orders:             make(map[string]*KiteOrder),
+		positions:          make(map[string]*KitePosition),
+		productConversions: make(map[string]string),
 	}
 
 	if store != nil {
@@ -281,6 +283,9 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 	if err := ensureTradeOpen(trade); err != nil {
 		return nil, err
 	}
+	if err := m.ensureTradeProductCurrent(trade); err != nil {
+		return nil, err
+	}
 
 	exitSide := opposite(trade.Side)
 	if err := validateStopAgainstEntry(trade, req.TriggerPrice); err != nil {
@@ -361,6 +366,9 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 		return nil, err
 	}
 	if err := ensureTradeOpen(trade); err != nil {
+		return nil, err
+	}
+	if err := m.ensureTradeProductCurrent(trade); err != nil {
 		return nil, err
 	}
 	if err := validateTargetAgainstEntry(trade, req.Price); err != nil {
@@ -545,6 +553,9 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	if err := ensureTradeOpen(trade); err != nil {
 		return nil, err
 	}
+	if err := m.ensureTradeProductCurrent(trade); err != nil {
+		return nil, err
+	}
 
 	if trade.StopOrderID != "" {
 		if err := m.broker.CancelOrder(ctx, "regular", trade.StopOrderID); err != nil {
@@ -686,11 +697,17 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	m.mu.Lock()
 	previousPositions := m.positions
 	countPositionChanges(m.positions, nextPositions, result)
+	productConversions := retainProductConversions(m.productConversions, nextPositions)
+	for fromKey, toKey := range detectProductConversions(m.positions, nextPositions) {
+		productConversions[fromKey] = toKey
+	}
+	result.ProductConversionsDetected = len(productConversions)
 	m.orders = nextOrders
 	m.positions = nextPositions
 	m.positionsSynced = true
+	m.productConversions = productConversions
 	m.mu.Unlock()
-	m.reconcileSyncedPositions(ctx, previousPositions, nextPositions)
+	m.reconcileSyncedPositions(ctx, previousPositions, nextPositions, productConversions)
 	if err := m.persistOrders(); err != nil {
 		return nil, err
 	}
@@ -703,6 +720,7 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 			"request_id", observability.RequestID(ctx),
 			"orders_synced", result.OrdersSynced,
 			"positions_synced", result.PositionsSynced,
+			"product_conversions_detected", result.ProductConversionsDetected,
 			"local_system_orders", result.LocalSystemOrders,
 			"external_orders", result.ExternalOrders,
 		)
@@ -733,7 +751,7 @@ func (m *Manager) SyncKiteLoop(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func (m *Manager) reconcileSyncedPositions(ctx context.Context, previous, next map[string]*KitePosition) {
+func (m *Manager) reconcileSyncedPositions(ctx context.Context, previous, next map[string]*KitePosition, productConversions map[string]string) {
 	for key, oldPosition := range previous {
 		if oldPosition == nil || oldPosition.Quantity == 0 {
 			continue
@@ -744,6 +762,10 @@ func (m *Manager) reconcileSyncedPositions(ctx context.Context, previous, next m
 			newQuantity = newPosition.Quantity
 		}
 		if newQuantity == oldPosition.Quantity {
+			continue
+		}
+		if _, converted := productConversions[key]; converted {
+			m.logProductConversionDetected(ctx, oldPosition, next[productConversions[key]])
 			continue
 		}
 
@@ -760,6 +782,20 @@ func (m *Manager) reconcileSyncedPositions(ctx context.Context, previous, next m
 			m.reduceExternallyClosedTrade(ctx, trade, absInt(newQuantity))
 		}
 	}
+}
+
+func (m *Manager) logProductConversionDetected(ctx context.Context, from, to *KitePosition) {
+	if m.logger == nil || from == nil || to == nil {
+		return
+	}
+	m.logger.WarnContext(ctx, "product_conversion_detected",
+		"request_id", observability.RequestID(ctx),
+		"exchange", from.Exchange,
+		"tradingsymbol", from.TradingSymbol,
+		"from_product", from.Product,
+		"to_product", to.Product,
+		"quantity", absInt(to.Quantity),
+	)
 }
 
 func (m *Manager) openTradesForPosition(exchange, symbol, product string) []*ManagedTrade {
@@ -1062,6 +1098,19 @@ func (m *Manager) get(id string) (*ManagedTrade, error) {
 		return nil, notFoundError("trade_not_found", "trade not found")
 	}
 	return cloneTrade(trade), nil
+}
+
+func (m *Manager) ensureTradeProductCurrent(trade *ManagedTrade) error {
+	m.mu.RLock()
+	toKey, converted := m.productConversions[positionKey(trade.Exchange, trade.TradingSymbol, trade.Product)]
+	m.mu.RUnlock()
+	if !converted {
+		return nil
+	}
+	return conflictError(
+		"product_conversion_detected",
+		fmt.Sprintf("position product changed from %s to %s; sync product conversion before modifying protection or exiting", trade.Product, productFromPositionKey(toKey)),
+	)
 }
 
 func (m *Manager) persist() error {
@@ -1399,6 +1448,18 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		}
 	}
 
+	for fromKey, toKey := range m.productConversions {
+		fromGroup := groupsByID[fromKey]
+		toGroup := groupsByID[toKey]
+		if fromGroup != nil && toGroup != nil {
+			fromGroup.Warnings = appendUnique(fromGroup.Warnings, WarningProductConversionDetected)
+			fromGroup.ConvertedToProduct = toGroup.Product
+			fromGroup.ManagementStatus = ManagementStatusPartiallyManaged
+			toGroup.Warnings = appendUnique(toGroup.Warnings, WarningProductConversionDetected)
+			toGroup.ConvertedFromProduct = fromGroup.Product
+		}
+	}
+
 	groups := make([]*PositionGroup, 0, len(groupsByID))
 	for _, group := range groupsByID {
 		if m.positionsSynced && group.CreationSource == CreationSourceLocalSystem && group.BrokerQuantity == 0 {
@@ -1443,6 +1504,14 @@ func positionKey(exchange, symbol, product string) string {
 	return strings.ToUpper(exchange) + ":" + strings.ToUpper(symbol) + ":" + strings.ToUpper(product)
 }
 
+func productFromPositionKey(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) != 3 {
+		return ""
+	}
+	return parts[2]
+}
+
 func countPositionChanges(previous, next map[string]*KitePosition, result *SyncResult) {
 	for key, position := range next {
 		old, ok := previous[key]
@@ -1459,6 +1528,50 @@ func countPositionChanges(previous, next map[string]*KitePosition, result *SyncR
 			result.PositionsRemoved++
 		}
 	}
+}
+
+func detectProductConversions(previous, next map[string]*KitePosition) map[string]string {
+	conversions := make(map[string]string)
+	for oldKey, oldPosition := range previous {
+		if oldPosition == nil || oldPosition.Quantity == 0 {
+			continue
+		}
+		if current := next[oldKey]; current != nil && current.Quantity != 0 {
+			continue
+		}
+
+		var candidateKey string
+		for newKey, newPosition := range next {
+			if newPosition == nil || newPosition.Quantity == 0 || newKey == oldKey {
+				continue
+			}
+			if !strings.EqualFold(oldPosition.Exchange, newPosition.Exchange) || !strings.EqualFold(oldPosition.TradingSymbol, newPosition.TradingSymbol) {
+				continue
+			}
+			if oldPosition.Quantity != newPosition.Quantity {
+				continue
+			}
+			if candidateKey != "" {
+				candidateKey = ""
+				break
+			}
+			candidateKey = newKey
+		}
+		if candidateKey != "" {
+			conversions[oldKey] = candidateKey
+		}
+	}
+	return conversions
+}
+
+func retainProductConversions(existing map[string]string, positions map[string]*KitePosition) map[string]string {
+	retained := make(map[string]string)
+	for fromKey, toKey := range existing {
+		if position := positions[toKey]; position != nil && position.Quantity != 0 {
+			retained[fromKey] = toKey
+		}
+	}
+	return retained
 }
 
 func absInt(value int) int {

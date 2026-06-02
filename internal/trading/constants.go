@@ -17,6 +17,7 @@ const (
 	WarningPartialExternalExit            = "PARTIAL_EXTERNAL_EXIT"
 	WarningPositionQuantityMismatch       = "POSITION_QUANTITY_MISMATCH"
 	WarningPositionMissingFromBroker      = "POSITION_MISSING_FROM_BROKER"
+	WarningProductConversionDetected      = "PRODUCT_CONVERSION_DETECTED"
 
 	DefaultSLLimitOffset          = 0.05
 	DefaultCommoditySLLimitOffset = 10.0

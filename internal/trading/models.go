@@ -75,14 +75,15 @@ type KiteOrder struct {
 }
 
 type SyncResult struct {
-	SyncedAt          time.Time `json:"synced_at"`
-	OrdersSynced      int       `json:"orders_synced"`
-	PositionsSynced   int       `json:"positions_synced"`
-	PositionsAdded    int       `json:"positions_added"`
-	PositionsChanged  int       `json:"positions_changed"`
-	PositionsRemoved  int       `json:"positions_removed"`
-	LocalSystemOrders int       `json:"local_system_orders"`
-	ExternalOrders    int       `json:"external_orders"`
+	SyncedAt                   time.Time `json:"synced_at"`
+	OrdersSynced               int       `json:"orders_synced"`
+	PositionsSynced            int       `json:"positions_synced"`
+	PositionsAdded             int       `json:"positions_added"`
+	PositionsChanged           int       `json:"positions_changed"`
+	PositionsRemoved           int       `json:"positions_removed"`
+	ProductConversionsDetected int       `json:"product_conversions_detected"`
+	LocalSystemOrders          int       `json:"local_system_orders"`
+	ExternalOrders             int       `json:"external_orders"`
 }
 
 type ManagedTrade struct {
@@ -114,22 +115,24 @@ type ManagedTrade struct {
 }
 
 type PositionGroup struct {
-	ID                string    `json:"id"`
-	Exchange          string    `json:"exchange"`
-	TradingSymbol     string    `json:"tradingsymbol"`
-	Product           string    `json:"product"`
-	Side              string    `json:"side"`
-	Quantity          int       `json:"quantity"`
-	LocalQuantity     int       `json:"local_quantity,omitempty"`
-	BrokerQuantity    int       `json:"broker_quantity,omitempty"`
-	AverageEntryPrice float64   `json:"average_entry_price,omitempty"`
-	TradeIDs          []string  `json:"trade_ids"`
-	TradeStatus       string    `json:"trade_status"`
-	CreationSource    string    `json:"creation_source"`
-	ManagementStatus  string    `json:"management_status"`
-	Warnings          []string  `json:"warnings,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                   string    `json:"id"`
+	Exchange             string    `json:"exchange"`
+	TradingSymbol        string    `json:"tradingsymbol"`
+	Product              string    `json:"product"`
+	Side                 string    `json:"side"`
+	Quantity             int       `json:"quantity"`
+	LocalQuantity        int       `json:"local_quantity,omitempty"`
+	BrokerQuantity       int       `json:"broker_quantity,omitempty"`
+	AverageEntryPrice    float64   `json:"average_entry_price,omitempty"`
+	TradeIDs             []string  `json:"trade_ids"`
+	TradeStatus          string    `json:"trade_status"`
+	CreationSource       string    `json:"creation_source"`
+	ManagementStatus     string    `json:"management_status"`
+	ConvertedFromProduct string    `json:"converted_from_product,omitempty"`
+	ConvertedToProduct   string    `json:"converted_to_product,omitempty"`
+	Warnings             []string  `json:"warnings,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type StopLoss struct {
