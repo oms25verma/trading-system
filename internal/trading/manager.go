@@ -699,6 +699,29 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	return result, nil
 }
 
+func (m *Manager) SyncKiteLoop(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			syncCtx, _ := observability.EnsureRequestID(ctx, "sync-"+observability.NewRequestID())
+			if _, err := m.SyncKite(syncCtx); err != nil && m.logger != nil {
+				m.logger.WarnContext(syncCtx, "kite_sync_failed",
+					"request_id", observability.RequestID(syncCtx),
+					"error", err,
+				)
+			}
+		}
+	}
+}
+
 func (m *Manager) TrailStops(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

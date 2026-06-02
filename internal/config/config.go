@@ -15,6 +15,7 @@ type Config struct {
 	AccessToken             string
 	TradeStorePath          string
 	PollInterval            time.Duration
+	SyncPollInterval        time.Duration
 	DefaultProduct          string
 	DefaultQuantity         int
 	DefaultMarketProtection *int
@@ -29,6 +30,12 @@ func Load() Config {
 	if raw := os.Getenv("POLL_SECONDS"); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			pollSeconds = parsed
+		}
+	}
+	syncPollSeconds := int64(0)
+	if raw := os.Getenv("SYNC_POLL_SECONDS"); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			syncPollSeconds = parsed
 		}
 	}
 
@@ -54,6 +61,7 @@ func Load() Config {
 		AccessToken:             os.Getenv("KITE_ACCESS_TOKEN"),
 		TradeStorePath:          tradeStorePath,
 		PollInterval:            time.Duration(pollSeconds) * time.Second,
+		SyncPollInterval:        time.Duration(syncPollSeconds) * time.Second,
 		DefaultProduct:          defaultProduct,
 		DefaultQuantity:         intEnv("DEFAULT_QUANTITY", 1),
 		DefaultMarketProtection: optionalIntEnv("DEFAULT_MARKET_PROTECTION"),
@@ -78,6 +86,9 @@ func (c Config) Validate(broker string) error {
 	}
 	if c.PollInterval <= 0 {
 		return fmt.Errorf("POLL_SECONDS must be positive")
+	}
+	if c.SyncPollInterval < 0 {
+		return fmt.Errorf("SYNC_POLL_SECONDS cannot be negative")
 	}
 	if c.TradeStorePath == "" {
 		return fmt.Errorf("TRADE_STORE_PATH is required")

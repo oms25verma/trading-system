@@ -49,6 +49,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go manager.TrailStops(ctx, cfg.PollInterval)
+	if cfg.SyncPollInterval > 0 {
+		logger.Info("kite_sync_poller_enabled", "interval_seconds", int(cfg.SyncPollInterval.Seconds()))
+		go manager.SyncKiteLoop(ctx, cfg.SyncPollInterval)
+	}
 
 	server := &http.Server{
 		Addr:              cfg.Addr,

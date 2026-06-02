@@ -53,6 +53,8 @@ POST /sync/kite
 
 Fetches the current Kite orderbook and net positions through the configured broker and stores the latest snapshots locally. With directory storage, snapshots are saved as `orders_DD_MM_YYYY.json` and `positions_DD_MM_YYYY.json`.
 
+This endpoint is always available as a force refresh. Automatic background sync is disabled by default; set `SYNC_POLL_SECONDS` to a positive value to enable the sync poller.
+
 ```json
 {
   "synced_at": "2026-05-28T10:00:00Z",
