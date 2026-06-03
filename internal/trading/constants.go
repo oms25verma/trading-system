@@ -13,12 +13,15 @@ const (
 	ManagementStatusManaged          = "MANAGED"
 	ManagementStatusUnmanaged        = "UNMANAGED"
 	ManagementStatusPartiallyManaged = "PARTIALLY_MANAGED"
+	ManagementStatusConflict         = "CONFLICT"
 
 	WarningOppositeExposureAcrossProducts = "OPPOSITE_EXPOSURE_ACROSS_PRODUCTS"
 	WarningPartialExternalExit            = "PARTIAL_EXTERNAL_EXIT"
 	WarningPositionQuantityMismatch       = "POSITION_QUANTITY_MISMATCH"
 	WarningPositionMissingFromBroker      = "POSITION_MISSING_FROM_BROKER"
 	WarningProductConversionDetected      = "PRODUCT_CONVERSION_DETECTED"
+	WarningAmbiguousExternalStopLoss      = "AMBIGUOUS_EXTERNAL_STOP_LOSS"
+	WarningAmbiguousExternalTarget        = "AMBIGUOUS_EXTERNAL_TARGET"
 
 	DefaultSLLimitOffset          = 0.05
 	DefaultCommoditySLLimitOffset = 10.0

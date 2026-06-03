@@ -84,6 +84,7 @@ type SyncResult struct {
 	ProductConversionsDetected int       `json:"product_conversions_detected"`
 	ExternalStopLossesLinked   int       `json:"external_stop_losses_linked"`
 	ExternalTargetsLinked      int       `json:"external_targets_linked"`
+	AmbiguousExternalExits     int       `json:"ambiguous_external_exits"`
 	LocalSystemOrders          int       `json:"local_system_orders"`
 	ExternalOrders             int       `json:"external_orders"`
 }

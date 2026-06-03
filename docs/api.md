@@ -63,6 +63,10 @@ This endpoint is always available as a force refresh. Automatic background sync 
   "positions_added": 1,
   "positions_changed": 1,
   "positions_removed": 0,
+  "product_conversions_detected": 0,
+  "external_stop_losses_linked": 0,
+  "external_targets_linked": 0,
+  "ambiguous_external_exits": 0,
   "local_system_orders": 1,
   "external_orders": 2
 }
@@ -250,6 +254,15 @@ During Kite sync, external SL/target orders are auto-linked to a managed local t
 - exactly one matching SL or target candidate
 
 If multiple candidates exist, the system skips linking so the future UI can resolve the conflict manually.
+
+Ambiguous external SL/target candidates are exposed on position groups:
+
+```json
+{
+  "management_status": "CONFLICT",
+  "warnings": ["AMBIGUOUS_EXTERNAL_STOP_LOSS"]
+}
+```
 
 ### Create Trade
 

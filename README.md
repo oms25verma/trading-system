@@ -82,7 +82,7 @@ For a managed group with one linked local trade, UI actions can use `/groups/{id
 
 Use `POST /groups/{id}/take-over` for a synced external-only position. It creates a local management record without placing another entry order, then enables the normal group SL/target/exit APIs.
 
-Kite sync auto-links external SL/target orders to a managed trade only when there is exactly one clear match. Ambiguous matches are left for manual conflict resolution later.
+Kite sync auto-links external SL/target orders to a managed trade only when there is exactly one clear match. Ambiguous matches are surfaced as `CONFLICT` groups with warnings such as `AMBIGUOUS_EXTERNAL_STOP_LOSS` and are left for manual conflict resolution later.
 
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 

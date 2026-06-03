@@ -992,19 +992,30 @@ func (m *Manager) reconcileExternalExitOrders(ctx context.Context, orders map[st
 		if isTradeClosed(trade) {
 			continue
 		}
+		ambiguous := false
 		if trade.StopOrderID == "" {
-			if order := singleExternalExitCandidate(orders, trade, "SL"); order != nil {
+			order, count := singleExternalExitCandidate(orders, trade, "SL")
+			if count > 1 {
+				ambiguous = true
+			} else if order != nil {
 				m.linkExternalStopLoss(ctx, trade.ID, order)
 				result.ExternalStopLossesLinked++
 				changed = true
 			}
 		}
 		if trade.TargetOrderID == "" {
-			if order := singleExternalExitCandidate(orders, trade, "LIMIT"); order != nil {
+			order, count := singleExternalExitCandidate(orders, trade, "LIMIT")
+			if count > 1 {
+				ambiguous = true
+			} else if order != nil {
 				m.linkExternalTarget(ctx, trade.ID, order)
 				result.ExternalTargetsLinked++
 				changed = true
 			}
+		}
+		if ambiguous {
+			result.AmbiguousExternalExits++
+			m.logAmbiguousExternalExit(ctx, trade)
 		}
 	}
 	if changed {
@@ -1012,22 +1023,26 @@ func (m *Manager) reconcileExternalExitOrders(ctx context.Context, orders map[st
 	}
 }
 
-func singleExternalExitCandidate(orders map[string]*KiteOrder, trade *ManagedTrade, orderType string) *KiteOrder {
+func singleExternalExitCandidate(orders map[string]*KiteOrder, trade *ManagedTrade, orderType string) (*KiteOrder, int) {
 	var candidate *KiteOrder
+	count := 0
 	for _, order := range orders {
 		if !isExternalExitCandidate(order, trade, orderType) {
 			continue
 		}
-		if candidate != nil {
-			return nil
+		count++
+		if count == 1 {
+			candidate = order
 		}
-		candidate = order
 	}
-	return candidate
+	if count != 1 {
+		return nil, count
+	}
+	return candidate, count
 }
 
 func isExternalExitCandidate(order *KiteOrder, trade *ManagedTrade, orderType string) bool {
-	if order == nil || strings.EqualFold(order.CreationSource, CreationSourceLocalSystem) {
+	if order == nil || strings.EqualFold(order.CreationSource, CreationSourceLocalSystem) || strings.EqualFold(order.Tag, LocalSystemOrderTag) {
 		return false
 	}
 	if !strings.EqualFold(order.Exchange, trade.Exchange) ||
@@ -1077,6 +1092,20 @@ func (m *Manager) linkExternalTarget(ctx context.Context, tradeID string, order 
 	result := cloneTrade(trade)
 	m.mu.Unlock()
 	m.logTradeEvent(ctx, "external_target_linked", result)
+}
+
+func (m *Manager) logAmbiguousExternalExit(ctx context.Context, trade *ManagedTrade) {
+	if m.logger == nil || trade == nil {
+		return
+	}
+	m.logger.WarnContext(ctx, "ambiguous_external_exit_orders",
+		"request_id", observability.RequestID(ctx),
+		"trade_id", trade.ID,
+		"exchange", trade.Exchange,
+		"tradingsymbol", trade.TradingSymbol,
+		"product", trade.Product,
+		"side", trade.Side,
+	)
 }
 
 func (m *Manager) logProductConversionDetected(ctx context.Context, from, to *KitePosition) {
@@ -1770,6 +1799,7 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 			group.Warnings = appendUnique(group.Warnings, WarningPositionMissingFromBroker)
 			group.ManagementStatus = ManagementStatusPartiallyManaged
 		}
+		m.applyExternalExitConflictWarningsLocked(group)
 		sort.Strings(group.TradeIDs)
 		if group.LocalQuantity > 0 && group.AverageEntryPrice > 0 {
 			group.AverageEntryPrice = group.AverageEntryPrice / float64(group.LocalQuantity)
@@ -1781,6 +1811,27 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		return groups[i].ID < groups[j].ID
 	})
 	return groups
+}
+
+func (m *Manager) applyExternalExitConflictWarningsLocked(group *PositionGroup) {
+	if group == nil || len(group.TradeIDs) == 0 || group.Quantity <= 0 {
+		return
+	}
+	probe := &ManagedTrade{
+		Exchange:      group.Exchange,
+		TradingSymbol: group.TradingSymbol,
+		Product:       group.Product,
+		Side:          group.Side,
+		Quantity:      group.Quantity,
+	}
+	if _, count := singleExternalExitCandidate(m.orders, probe, "SL"); count > 1 {
+		group.Warnings = appendUnique(group.Warnings, WarningAmbiguousExternalStopLoss)
+		group.ManagementStatus = ManagementStatusConflict
+	}
+	if _, count := singleExternalExitCandidate(m.orders, probe, "LIMIT"); count > 1 {
+		group.Warnings = appendUnique(group.Warnings, WarningAmbiguousExternalTarget)
+		group.ManagementStatus = ManagementStatusConflict
+	}
 }
 
 func addCrossProductExposureWarnings(groups []*PositionGroup) {

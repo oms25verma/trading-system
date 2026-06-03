@@ -961,9 +961,54 @@ func TestSyncKiteDoesNotLinkAmbiguousExternalExitOrders(t *testing.T) {
 	if result.ExternalStopLossesLinked != 0 {
 		t.Fatalf("expected no ambiguous SL link, got %+v", result)
 	}
+	if result.AmbiguousExternalExits != 1 {
+		t.Fatalf("expected one ambiguous external exit, got %+v", result)
+	}
 	trade := manager.List()[0]
 	if trade.StopOrderID != "" || trade.StopLoss != nil {
 		t.Fatalf("expected no linked stop-loss, got %+v", trade)
+	}
+	groups := manager.ListGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected one group, got %d", len(groups))
+	}
+	if groups[0].ManagementStatus != ManagementStatusConflict || !contains(groups[0].Warnings, WarningAmbiguousExternalStopLoss) {
+		t.Fatalf("expected conflict group with ambiguous SL warning, got %+v", groups[0])
+	}
+}
+
+func TestSyncKiteIgnoresTaggedLocalOrdersForExternalExitConflicts(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{OrderID: "local-sl-1", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 89, TriggerPrice: 90, Tag: LocalSystemOrderTag},
+		{OrderID: "local-sl-2", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 88, TriggerPrice: 89, Tag: LocalSystemOrderTag},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AmbiguousExternalExits != 0 || result.ExternalStopLossesLinked != 0 {
+		t.Fatalf("expected tagged local orders to be ignored, got %+v", result)
+	}
+	groups := manager.ListGroups()
+	if len(groups) != 1 || groups[0].ManagementStatus != ManagementStatusManaged || contains(groups[0].Warnings, WarningAmbiguousExternalStopLoss) {
+		t.Fatalf("expected managed group without external conflict, got %+v", groups)
 	}
 }
 
