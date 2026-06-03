@@ -172,6 +172,24 @@ Request bodies match the equivalent trade-level APIs. These endpoints delegate t
 
 External-only groups return `CONFLICT/group_unmanaged`. Groups with multiple open local child trades return `CONFLICT/ambiguous_group_trades` until take-over and group-allocation logic is implemented.
 
+### Take Over External Position
+
+For a synced Kite-only `UNMANAGED` group, create a local management record without placing a duplicate entry order:
+
+```http
+POST /groups/{id}/take-over
+```
+
+Optional body:
+
+```json
+{
+  "entry_price": 100
+}
+```
+
+If `entry_price` is omitted, the service uses broker LTP. After take-over, the normal group SL/target/exit APIs are available. Repeating take-over returns `CONFLICT/group_already_managed`.
+
 ### Create Trade
 
 ```http

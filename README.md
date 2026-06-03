@@ -80,6 +80,8 @@ Sync also detects unambiguous product conversions such as `MIS -> NRML`. Convert
 
 For a managed group with one linked local trade, UI actions can use `/groups/{id}/stop-loss`, `/groups/{id}/target`, and `/groups/{id}/exit`. External-only and multi-trade groups return explicit conflicts until take-over and group-allocation workflows are added.
 
+Use `POST /groups/{id}/take-over` for a synced external-only position. It creates a local management record without placing another entry order, then enables the normal group SL/target/exit APIs.
+
 When `entry_price` is known, the service validates risk orders locally before sending them to Kite:
 
 ```text

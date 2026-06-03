@@ -133,6 +133,10 @@ type ImportTradeRequest struct {
 	EntryOrderID  string  `json:"entry_order_id"`
 }
 
+type TakeOverGroupRequest struct {
+	EntryPrice float64 `json:"entry_price,omitempty"`
+}
+
 func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTrade, error) {
 	side := strings.ToUpper(req.Side)
 	if side != "BUY" && side != "SELL" {
@@ -183,6 +187,7 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		EntryOrderID:    orderID,
 		EntryStatus:     initialEntryStatus(req),
 		TradeStatus:     TradeStatusOpen,
+		CreationSource:  CreationSourceLocalSystem,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -242,6 +247,7 @@ func (m *Manager) Import(ctx context.Context, req ImportTradeRequest) (*ManagedT
 		EntryOrderID:    req.EntryOrderID,
 		EntryStatus:     OrderStatusComplete,
 		TradeStatus:     TradeStatusOpen,
+		CreationSource:  CreationSourceLocalSystem,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -719,6 +725,63 @@ func (m *Manager) ExitGroup(ctx context.Context, groupID string) (*ManagedTrade,
 	return m.Exit(ctx, trade.ID)
 }
 
+func (m *Manager) TakeOverGroup(ctx context.Context, groupID string, req TakeOverGroupRequest) (*ManagedTrade, error) {
+	groupID = strings.ToUpper(groupID)
+
+	m.mu.RLock()
+	position := cloneKitePosition(m.positions[groupID])
+	m.mu.RUnlock()
+	if position == nil || position.Quantity == 0 {
+		return nil, notFoundError("group_not_found", "synced position group not found")
+	}
+	if trades := m.openTradesForPosition(position.Exchange, position.TradingSymbol, position.Product); len(trades) > 0 {
+		return nil, conflictError("group_already_managed", "position group already has a linked local trade")
+	}
+
+	entryPrice := req.EntryPrice
+	if entryPrice < 0 {
+		return nil, validationError("invalid_entry_price", "entry_price cannot be negative")
+	}
+	if entryPrice == 0 {
+		ltp, err := m.broker.LTP(ctx, position.Exchange, position.TradingSymbol)
+		if err != nil {
+			return nil, fmt.Errorf("entry_price is required when LTP cannot be fetched: %w", err)
+		}
+		entryPrice = ltp
+	}
+
+	now := time.Now().UTC()
+	trade := &ManagedTrade{
+		ID:              fmt.Sprintf("%s-takeover-%d", strings.ToLower(position.TradingSymbol), now.UnixNano()),
+		Exchange:        position.Exchange,
+		TradingSymbol:   position.TradingSymbol,
+		Side:            sideFromQuantity(position.Quantity),
+		Quantity:        absInt(position.Quantity),
+		InitialQuantity: absInt(position.Quantity),
+		Product:         position.Product,
+		EntryPrice:      entryPrice,
+		EntryOrderID:    fmt.Sprintf("external-position:%s:%d", groupID, now.UnixNano()),
+		EntryStatus:     OrderStatusComplete,
+		TradeStatus:     TradeStatusOpen,
+		CreationSource:  CreationSourceKiteApp,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+
+	m.mu.Lock()
+	if trades := m.openTradesForPositionLocked(position.Exchange, position.TradingSymbol, position.Product); len(trades) > 0 {
+		m.mu.Unlock()
+		return nil, conflictError("group_already_managed", "position group already has a linked local trade")
+	}
+	m.trades[trade.ID] = trade
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	m.logTradeEvent(ctx, "group_management_taken_over", trade)
+	return cloneTrade(trade), nil
+}
+
 func (m *Manager) singleManagedTradeForGroup(groupID string) (*ManagedTrade, error) {
 	groupID = strings.ToUpper(groupID)
 
@@ -939,7 +1002,10 @@ func (m *Manager) logProductConversionDetected(ctx context.Context, from, to *Ki
 func (m *Manager) openTradesForPosition(exchange, symbol, product string) []*ManagedTrade {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.openTradesForPositionLocked(exchange, symbol, product)
+}
 
+func (m *Manager) openTradesForPositionLocked(exchange, symbol, product string) []*ManagedTrade {
 	var trades []*ManagedTrade
 	for _, trade := range m.trades {
 		if isTradeClosed(trade) || !samePositionGroup(trade.Exchange, trade.TradingSymbol, trade.Product, exchange, symbol, product) {
@@ -1515,6 +1581,10 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		groupID := positionGroupID(trade.Exchange, trade.TradingSymbol, trade.Product)
 		group := groupsByID[groupID]
 		if group == nil {
+			creationSource := trade.CreationSource
+			if creationSource == "" {
+				creationSource = CreationSourceLocalSystem
+			}
 			group = &PositionGroup{
 				ID:               groupID,
 				Exchange:         strings.ToUpper(trade.Exchange),
@@ -1522,12 +1592,14 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 				Product:          strings.ToUpper(trade.Product),
 				Side:             strings.ToUpper(trade.Side),
 				TradeStatus:      TradeStatusOpen,
-				CreationSource:   CreationSourceLocalSystem,
+				CreationSource:   creationSource,
 				ManagementStatus: ManagementStatusManaged,
 				CreatedAt:        trade.CreatedAt,
 				UpdatedAt:        trade.UpdatedAt,
 			}
 			groupsByID[groupID] = group
+		} else if trade.CreationSource != "" && group.CreationSource != trade.CreationSource {
+			group.CreationSource = CreationSourceMixed
 		}
 		group.TradeIDs = append(group.TradeIDs, trade.ID)
 		group.LocalQuantity += trade.Quantity
@@ -1600,7 +1672,7 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 
 	groups := make([]*PositionGroup, 0, len(groupsByID))
 	for _, group := range groupsByID {
-		if m.positionsSynced && group.CreationSource == CreationSourceLocalSystem && group.BrokerQuantity == 0 {
+		if m.positionsSynced && len(group.TradeIDs) > 0 && group.BrokerQuantity == 0 {
 			group.Warnings = appendUnique(group.Warnings, WarningPositionMissingFromBroker)
 			group.ManagementStatus = ManagementStatusPartiallyManaged
 		}

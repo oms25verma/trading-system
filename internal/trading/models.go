@@ -98,6 +98,7 @@ type ManagedTrade struct {
 	EntryOrderID      string             `json:"entry_order_id"`
 	EntryStatus       string             `json:"entry_status,omitempty"`
 	TradeStatus       string             `json:"trade_status,omitempty"`
+	CreationSource    string             `json:"creation_source,omitempty"`
 	ExitReason        string             `json:"exit_reason,omitempty"`
 	ExitOrderID       string             `json:"exit_order_id,omitempty"`
 	StopOrderID       string             `json:"stop_order_id,omitempty"`

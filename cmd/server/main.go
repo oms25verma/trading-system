@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -233,6 +234,14 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		trade, err := manager.ExitGroup(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
 	})
+	mux.HandleFunc("POST /groups/{id}/take-over", func(w http.ResponseWriter, r *http.Request) {
+		var req trading.TakeOverGroupRequest
+		if !decodeOptional(w, r, &req) {
+			return
+		}
+		trade, err := manager.TakeOverGroup(r.Context(), r.PathValue("id"), req)
+		writeResult(r.Context(), w, trade, err)
+	})
 	return mux
 }
 
@@ -263,6 +272,25 @@ func applyCreateDefaults(req *trading.CreateTradeRequest, cfg config.Config) {
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+		writeJSON(w, http.StatusBadRequest, apiError{
+			Kind:    string(trading.ErrorKindValidation),
+			Code:    "invalid_json",
+			Message: err.Error(),
+		})
+		return false
+	}
+	return true
+}
+
+func decodeOptional(w http.ResponseWriter, r *http.Request, out any) bool {
+	defer r.Body.Close()
+	if r.Body == http.NoBody {
+		return true
+	}
+	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true
+		}
 		writeJSON(w, http.StatusBadRequest, apiError{
 			Kind:    string(trading.ErrorKindValidation),
 			Code:    "invalid_json",

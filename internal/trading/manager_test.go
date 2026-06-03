@@ -799,6 +799,57 @@ func TestGroupActionRejectsMultipleLocalTrades(t *testing.T) {
 	}
 }
 
+func TestTakeOverExternalGroupEnablesManagedActions(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: -2}}
+	manager := NewManager(broker)
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err := manager.TakeOverGroup(context.Background(), "nse:infy:mis", TakeOverGroupRequest{EntryPrice: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.Side != "SELL" || trade.Quantity != 2 || trade.EntryPrice != 100 || trade.CreationSource != CreationSourceKiteApp {
+		t.Fatalf("unexpected taken-over trade: %+v", trade)
+	}
+	if broker.placeCount != 0 {
+		t.Fatalf("expected no entry order during take-over, got %d place calls", broker.placeCount)
+	}
+
+	trade, err = manager.AddGroupStopLoss(context.Background(), "NSE:INFY:MIS", StopLossRequest{TriggerPrice: 110, LimitPrice: 111})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID == "" || broker.orders[trade.StopOrderID].Product != "MIS" || broker.orders[trade.StopOrderID].Quantity != 2 {
+		t.Fatalf("expected managed stop-loss after take-over, got %+v", trade)
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 1 || groups[0].ManagementStatus != ManagementStatusManaged || groups[0].CreationSource != CreationSourceKiteApp {
+		t.Fatalf("expected managed Kite-app group, got %+v", groups)
+	}
+}
+
+func TestTakeOverGroupRejectsAlreadyManagedGroup(t *testing.T) {
+	broker := newFakeBroker()
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.TakeOverGroup(context.Background(), "NSE:INFY:MIS", TakeOverGroupRequest{EntryPrice: 100}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.TakeOverGroup(context.Background(), "NSE:INFY:MIS", TakeOverGroupRequest{EntryPrice: 100})
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "group_already_managed" {
+		t.Fatalf("expected group_already_managed, got %v", err)
+	}
+}
+
 func TestEnterWithOnlyStopLossAndOffset(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

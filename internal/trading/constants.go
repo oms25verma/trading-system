@@ -8,6 +8,7 @@ const (
 	CreationSourceLocalSystem = "LOCAL_SYSTEM"
 	CreationSourceKiteApp     = "KITE_APP"
 	CreationSourceUnknown     = "UNKNOWN"
+	CreationSourceMixed       = "MIXED"
 
 	ManagementStatusManaged          = "MANAGED"
 	ManagementStatusUnmanaged        = "UNMANAGED"
