@@ -82,6 +82,12 @@ empty tag -> KITE_APP
 other tag -> UNKNOWN
 ```
 
+List endpoints support paged mode when any query parameter is supplied. Useful filters for orders:
+
+```http
+GET /orders?status=OPEN&creation_source=LOCAL_SYSTEM&page=1&page_size=50&sort_by=synced_at&sort_dir=desc
+```
+
 ### List Synced Positions
 
 ```http
@@ -90,12 +96,40 @@ GET /positions
 
 Returns the latest locally synced Kite net position snapshot.
 
+Useful filters:
+
+```http
+GET /positions?exchange=MCX&symbol=SILVERM26JUNFUT&page=1&page_size=50
+```
+
 ## Trades
 
 ### List Trades
 
 ```http
 GET /trades
+```
+
+Without query parameters this returns the original plain JSON array. With query parameters it returns:
+
+```json
+{
+  "data": [],
+  "pagination": {
+    "page": 1,
+    "page_size": 50,
+    "total": 0,
+    "total_pages": 0,
+    "has_next": false,
+    "has_prev": false
+  }
+}
+```
+
+Useful filters:
+
+```http
+GET /trades?status=OPEN&side=BUY&product=MIS&page=1&page_size=50&sort_by=updated_at&sort_dir=desc
 ```
 
 ## Position Groups
@@ -107,6 +141,22 @@ GET /groups
 ```
 
 Groups merge open local trades with the latest synced Kite net positions and are keyed by `exchange + tradingsymbol + product`. Synced Kite-only positions appear as `UNMANAGED` so the UI can surface them before local SL/target management is added.
+
+Useful filters:
+
+```http
+GET /groups?management_status=UNMANAGED&exchange=MCX&page=1&page_size=50&sort_by=tradingsymbol
+```
+
+Supported common list parameters:
+
+```text
+page, page_size, sort_by, sort_dir
+exchange, symbol/tradingsymbol, side, product, status
+creation_source, management_status, order_type, warning
+```
+
+`page_size` defaults to `50` and is capped at `500`.
 
 Example response:
 
@@ -189,6 +239,17 @@ Optional body:
 ```
 
 If `entry_price` is omitted, the service uses broker LTP. After take-over, the normal group SL/target/exit APIs are available. Repeating take-over returns `CONFLICT/group_already_managed`.
+
+During Kite sync, external SL/target orders are auto-linked to a managed local trade only when matching is unambiguous:
+
+- same exchange, symbol, and product
+- opposite transaction side
+- open order
+- matching quantity
+- external source, not tagged `TSLOCAL`
+- exactly one matching SL or target candidate
+
+If multiple candidates exist, the system skips linking so the future UI can resolve the conflict manually.
 
 ### Create Trade
 

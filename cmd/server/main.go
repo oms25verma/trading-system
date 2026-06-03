@@ -114,17 +114,37 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /trades", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, manager.List())
+	mux.HandleFunc("GET /trades", func(w http.ResponseWriter, r *http.Request) {
+		trades := manager.List()
+		if !hasListQuery(r) {
+			writeJSON(w, http.StatusOK, trades)
+			return
+		}
+		writePagedResult(r.Context(), w, r, filterTrades(trades, r))
 	})
-	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, manager.ListGroups())
+	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
+		groups := manager.ListGroups()
+		if !hasListQuery(r) {
+			writeJSON(w, http.StatusOK, groups)
+			return
+		}
+		writePagedResult(r.Context(), w, r, filterGroups(groups, r))
 	})
-	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, manager.ListSyncedOrders())
+	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, r *http.Request) {
+		orders := manager.ListSyncedOrders()
+		if !hasListQuery(r) {
+			writeJSON(w, http.StatusOK, orders)
+			return
+		}
+		writePagedResult(r.Context(), w, r, filterOrders(orders, r))
 	})
-	mux.HandleFunc("GET /positions", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, manager.ListSyncedPositions())
+	mux.HandleFunc("GET /positions", func(w http.ResponseWriter, r *http.Request) {
+		positions := manager.ListSyncedPositions()
+		if !hasListQuery(r) {
+			writeJSON(w, http.StatusOK, positions)
+			return
+		}
+		writePagedResult(r.Context(), w, r, filterPositions(positions, r))
 	})
 	mux.HandleFunc("POST /sync/kite", func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.SyncKite(r.Context())

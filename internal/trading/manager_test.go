@@ -96,7 +96,23 @@ func (f *fakeBroker) OrderDetails(_ context.Context, _ string, orderID string) (
 func (f *fakeBroker) Orders(_ context.Context) ([]KiteOrder, error) {
 	if f.synced != nil {
 		out := make([]KiteOrder, len(f.synced))
-		copy(out, f.synced)
+		for i, order := range f.synced {
+			out[i] = order
+			if _, ok := f.orders[order.OrderID]; !ok {
+				f.orders[order.OrderID] = Order{
+					Exchange:        order.Exchange,
+					TradingSymbol:   order.TradingSymbol,
+					TransactionType: order.TransactionType,
+					Quantity:        order.Quantity,
+					Product:         order.Product,
+					OrderType:       order.OrderType,
+					Price:           order.Price,
+					TriggerPrice:    order.TriggerPrice,
+					Tag:             order.Tag,
+				}
+				f.status[order.OrderID] = order.Status
+			}
+		}
 		return out, nil
 	}
 	out := make([]KiteOrder, 0, len(f.orders))
@@ -847,6 +863,107 @@ func TestTakeOverGroupRejectsAlreadyManagedGroup(t *testing.T) {
 	var domainErr *DomainError
 	if !errors.As(err, &domainErr) || domainErr.Code != "group_already_managed" {
 		t.Fatalf("expected group_already_managed, got %v", err)
+	}
+}
+
+func TestSyncKiteLinksUnambiguousExternalExitOrders(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{
+			OrderID:         "ext-sl",
+			Exchange:        "NSE",
+			TradingSymbol:   "INFY",
+			TransactionType: "SELL",
+			Quantity:        1,
+			Product:         "MIS",
+			OrderType:       "SL",
+			Status:          OrderStatusOpen,
+			Price:           89,
+			TriggerPrice:    90,
+		},
+		{
+			OrderID:         "ext-target",
+			Exchange:        "NSE",
+			TradingSymbol:   "INFY",
+			TransactionType: "SELL",
+			Quantity:        1,
+			Product:         "MIS",
+			OrderType:       "LIMIT",
+			Status:          OrderStatusOpen,
+			Price:           120,
+		},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExternalStopLossesLinked != 1 || result.ExternalTargetsLinked != 1 {
+		t.Fatalf("expected external exits linked, got %+v", result)
+	}
+	trade = manager.List()[0]
+	if trade.StopOrderID != "ext-sl" || trade.StopLoss == nil || trade.StopLoss.TriggerPrice != 90 || trade.StopLoss.LimitPrice != 89 {
+		t.Fatalf("expected linked external SL, got %+v", trade)
+	}
+	if trade.TargetOrderID != "ext-target" || trade.Target == nil || trade.Target.Price != 120 {
+		t.Fatalf("expected linked external target, got %+v", trade)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 125})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TargetOrderID != "ext-target" || broker.modifyCount != 1 {
+		t.Fatalf("expected linked external target to be modified, got trade=%+v modifyCount=%d", trade, broker.modifyCount)
+	}
+}
+
+func TestSyncKiteDoesNotLinkAmbiguousExternalExitOrders(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{OrderID: "ext-sl-1", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 89, TriggerPrice: 90},
+		{OrderID: "ext-sl-2", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 88, TriggerPrice: 89},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+
+	result, err := manager.SyncKite(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExternalStopLossesLinked != 0 {
+		t.Fatalf("expected no ambiguous SL link, got %+v", result)
+	}
+	trade := manager.List()[0]
+	if trade.StopOrderID != "" || trade.StopLoss != nil {
+		t.Fatalf("expected no linked stop-loss, got %+v", trade)
 	}
 }
 

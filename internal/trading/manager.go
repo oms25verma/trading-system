@@ -909,6 +909,7 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	m.productConversions = productConversions
 	m.mu.Unlock()
 	m.reconcileSyncedPositions(ctx, previousPositions, nextPositions, productConversions)
+	m.reconcileExternalExitOrders(ctx, nextOrders, result)
 	if err := m.persistOrders(); err != nil {
 		return nil, err
 	}
@@ -983,6 +984,99 @@ func (m *Manager) reconcileSyncedPositions(ctx context.Context, previous, next m
 			m.reduceExternallyClosedTrade(ctx, trade, absInt(newQuantity))
 		}
 	}
+}
+
+func (m *Manager) reconcileExternalExitOrders(ctx context.Context, orders map[string]*KiteOrder, result *SyncResult) {
+	changed := false
+	for _, trade := range m.List() {
+		if isTradeClosed(trade) {
+			continue
+		}
+		if trade.StopOrderID == "" {
+			if order := singleExternalExitCandidate(orders, trade, "SL"); order != nil {
+				m.linkExternalStopLoss(ctx, trade.ID, order)
+				result.ExternalStopLossesLinked++
+				changed = true
+			}
+		}
+		if trade.TargetOrderID == "" {
+			if order := singleExternalExitCandidate(orders, trade, "LIMIT"); order != nil {
+				m.linkExternalTarget(ctx, trade.ID, order)
+				result.ExternalTargetsLinked++
+				changed = true
+			}
+		}
+	}
+	if changed {
+		_ = m.persist()
+	}
+}
+
+func singleExternalExitCandidate(orders map[string]*KiteOrder, trade *ManagedTrade, orderType string) *KiteOrder {
+	var candidate *KiteOrder
+	for _, order := range orders {
+		if !isExternalExitCandidate(order, trade, orderType) {
+			continue
+		}
+		if candidate != nil {
+			return nil
+		}
+		candidate = order
+	}
+	return candidate
+}
+
+func isExternalExitCandidate(order *KiteOrder, trade *ManagedTrade, orderType string) bool {
+	if order == nil || strings.EqualFold(order.CreationSource, CreationSourceLocalSystem) {
+		return false
+	}
+	if !strings.EqualFold(order.Exchange, trade.Exchange) ||
+		!strings.EqualFold(order.TradingSymbol, trade.TradingSymbol) ||
+		!strings.EqualFold(order.Product, trade.Product) {
+		return false
+	}
+	if !strings.EqualFold(order.TransactionType, opposite(trade.Side)) || !strings.EqualFold(order.Status, OrderStatusOpen) {
+		return false
+	}
+	if order.Quantity != trade.Quantity {
+		return false
+	}
+	if orderType == "SL" {
+		return strings.HasPrefix(strings.ToUpper(order.OrderType), "SL") && order.TriggerPrice > 0
+	}
+	return strings.EqualFold(order.OrderType, orderType) && order.Price > 0
+}
+
+func (m *Manager) linkExternalStopLoss(ctx context.Context, tradeID string, order *KiteOrder) {
+	m.mu.Lock()
+	trade := m.trades[tradeID]
+	if trade == nil || isTradeClosed(trade) || trade.StopOrderID != "" {
+		m.mu.Unlock()
+		return
+	}
+	trade.StopOrderID = order.OrderID
+	trade.StopOrderStatus = order.Status
+	trade.StopLoss = &StopLoss{TriggerPrice: order.TriggerPrice, LimitPrice: order.Price}
+	trade.UpdatedAt = time.Now().UTC()
+	result := cloneTrade(trade)
+	m.mu.Unlock()
+	m.logTradeEvent(ctx, "external_stop_loss_linked", result)
+}
+
+func (m *Manager) linkExternalTarget(ctx context.Context, tradeID string, order *KiteOrder) {
+	m.mu.Lock()
+	trade := m.trades[tradeID]
+	if trade == nil || isTradeClosed(trade) || trade.TargetOrderID != "" {
+		m.mu.Unlock()
+		return
+	}
+	trade.TargetOrderID = order.OrderID
+	trade.TargetOrderStatus = order.Status
+	trade.Target = &Target{Price: order.Price}
+	trade.UpdatedAt = time.Now().UTC()
+	result := cloneTrade(trade)
+	m.mu.Unlock()
+	m.logTradeEvent(ctx, "external_target_linked", result)
 }
 
 func (m *Manager) logProductConversionDetected(ctx context.Context, from, to *KitePosition) {
