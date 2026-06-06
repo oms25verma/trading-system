@@ -1088,6 +1088,40 @@ func (m *Manager) GetSyncedOrder(id string) (*KiteOrder, error) {
 	return order, nil
 }
 
+func (m *Manager) CancelSyncedOrder(ctx context.Context, id string) (*OrderCancelResult, error) {
+	order, err := m.GetSyncedOrder(id)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(order.Status, OrderStatusOpen) {
+		return nil, conflictError("order_not_open", fmt.Sprintf("only OPEN orders can be cancelled; current status is %s", order.Status))
+	}
+
+	tradeID, role := m.tradeOrderReference(id)
+	var trade *ManagedTrade
+	switch role {
+	case "entry":
+		trade, err = m.CancelEntry(ctx, tradeID)
+	case "stop_loss":
+		trade, err = m.RemoveStopLoss(ctx, tradeID)
+	case "target":
+		trade, err = m.RemoveTarget(ctx, tradeID)
+	default:
+		err = m.broker.CancelOrder(ctx, "regular", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := m.updateSyncedOrderStatus(id, OrderStatusCancelled); err != nil {
+		return nil, err
+	}
+	updatedOrder, err := m.GetSyncedOrder(id)
+	if err != nil {
+		return nil, err
+	}
+	return &OrderCancelResult{Order: updatedOrder, Trade: trade}, nil
+}
+
 func (m *Manager) ListSyncedPositions() []*KitePosition {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1881,6 +1915,40 @@ func (m *Manager) updateExitOrderStatuses(id, stopStatus, targetStatus string) e
 		return nil
 	}
 	return m.persist()
+}
+
+func (m *Manager) updateSyncedOrderStatus(orderID, status string) error {
+	m.mu.Lock()
+	order := m.orders[orderID]
+	if order == nil {
+		m.mu.Unlock()
+		return notFoundError("order_not_found", "synced order not found")
+	}
+	if order.Status == status {
+		m.mu.Unlock()
+		return nil
+	}
+	order.Status = status
+	order.SyncedAt = time.Now().UTC()
+	m.mu.Unlock()
+	return m.persistOrders()
+}
+
+func (m *Manager) tradeOrderReference(orderID string) (string, string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, trade := range m.trades {
+		if trade.EntryOrderID == orderID {
+			return trade.ID, "entry"
+		}
+		if trade.StopOrderID == orderID {
+			return trade.ID, "stop_loss"
+		}
+		if trade.TargetOrderID == orderID {
+			return trade.ID, "target"
+		}
+	}
+	return "", ""
 }
 
 func (m *Manager) reconcileOpenExitOrderDetails(ctx context.Context, id string, stopDetails, targetDetails *OrderDetails) error {

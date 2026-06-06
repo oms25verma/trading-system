@@ -1150,6 +1150,76 @@ func TestDetailGettersReturnSyncedState(t *testing.T) {
 	}
 }
 
+func TestCancelSyncedOrderCancelsStandaloneOpenOrder(t *testing.T) {
+	broker := newFakeBroker()
+	broker.synced = []KiteOrder{
+		{OrderID: "external-open", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "BUY", Quantity: 1, Product: "MIS", OrderType: "LIMIT", Status: OrderStatusOpen, Price: 100},
+	}
+	manager := NewManager(broker)
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.CancelSyncedOrder(context.Background(), "external-open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Trade != nil {
+		t.Fatalf("expected no linked trade, got %+v", result.Trade)
+	}
+	if result.Order == nil || result.Order.Status != OrderStatusCancelled {
+		t.Fatalf("expected cancelled order result, got %+v", result)
+	}
+	if broker.cancelCount != 1 {
+		t.Fatalf("expected one broker cancel, got %d", broker.cancelCount)
+	}
+	order, err := manager.GetSyncedOrder("external-open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != OrderStatusCancelled {
+		t.Fatalf("expected synced order status cancelled, got %+v", order)
+	}
+}
+
+func TestCancelSyncedOrderClearsLinkedStopLoss(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopOrderID := trade.StopOrderID
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.CancelSyncedOrder(context.Background(), stopOrderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Trade == nil || result.Trade.StopOrderID != "" || result.Trade.StopLoss != nil {
+		t.Fatalf("expected linked stop-loss cleared, got %+v", result)
+	}
+	if result.Order == nil || result.Order.Status != OrderStatusCancelled {
+		t.Fatalf("expected synced stop order cancelled, got %+v", result)
+	}
+	if broker.cancelCount != 1 {
+		t.Fatalf("expected one broker cancel, got %d", broker.cancelCount)
+	}
+}
+
 func TestLinkAndUnlinkGroupExternalExitOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

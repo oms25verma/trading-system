@@ -161,6 +161,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		order, err := manager.GetSyncedOrder(r.PathValue("id"))
 		writeResult(r.Context(), w, order, err)
 	})
+	mux.HandleFunc("POST /orders/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		result, err := manager.CancelSyncedOrder(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, result, err)
+	})
 	mux.HandleFunc("GET /positions", func(w http.ResponseWriter, r *http.Request) {
 		positions := manager.ListSyncedPositions()
 		if !hasListQuery(r) {

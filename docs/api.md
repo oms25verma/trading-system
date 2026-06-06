@@ -126,6 +126,7 @@ This endpoint is always available as a force refresh. Automatic background sync 
 ```http
 GET /orders
 GET /orders/{order_id}
+POST /orders/{order_id}/cancel
 ```
 
 Returns the latest locally synced orderbook snapshot. `creation_source` is inferred from Kite `tag`:
@@ -141,6 +142,8 @@ List endpoints support paged mode when any query parameter is supplied. Useful f
 ```http
 GET /orders?status=OPEN&creation_source=LOCAL_SYSTEM&page=1&page_size=50&sort_by=synced_at&sort_dir=desc
 ```
+
+`POST /orders/{order_id}/cancel` cancels only `OPEN` orders from the synced orderbook. If the order is linked to a managed trade as an entry, SL, or target, the matching local trade state is updated through the same safe workflows as `cancel-entry`, remove SL, or remove target.
 
 ### List Synced Positions
 

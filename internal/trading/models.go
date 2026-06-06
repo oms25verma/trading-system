@@ -74,6 +74,11 @@ type KiteOrder struct {
 	SyncedAt        time.Time `json:"synced_at"`
 }
 
+type OrderCancelResult struct {
+	Order *KiteOrder    `json:"order,omitempty"`
+	Trade *ManagedTrade `json:"trade,omitempty"`
+}
+
 type SyncResult struct {
 	SyncedAt                   time.Time `json:"synced_at"`
 	OrdersSynced               int       `json:"orders_synced"`
