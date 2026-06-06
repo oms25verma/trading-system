@@ -1012,6 +1012,77 @@ func TestSyncKiteIgnoresTaggedLocalOrdersForExternalExitConflicts(t *testing.T) 
 	}
 }
 
+func TestDashboardSummaryReportsHealthyManagedState(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := manager.DashboardSummary()
+	if summary.RiskStatus != "OK" {
+		t.Fatalf("expected OK risk status, got %+v", summary)
+	}
+	if summary.ActiveGroups != 1 || summary.ManagedGroups != 1 || summary.OpenTrades != 1 || summary.ClosedTrades != 0 {
+		t.Fatalf("unexpected dashboard counts: %+v", summary)
+	}
+	if summary.ConflictGroups != 0 || summary.WarningGroups != 0 || summary.UnmanagedGroups != 0 {
+		t.Fatalf("expected no warnings/conflicts, got %+v", summary)
+	}
+}
+
+func TestDashboardSummaryReportsConflictsAndRejectedOrders(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{OrderID: "ext-sl-1", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 89, TriggerPrice: 90},
+		{OrderID: "ext-sl-2", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 88, TriggerPrice: 89},
+		{OrderID: "rejected-1", Exchange: "NSE", TradingSymbol: "SBIN", TransactionType: "BUY", Quantity: 1, Product: "MIS", OrderType: "MARKET", Status: OrderStatusRejected},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := manager.DashboardSummary()
+	if summary.RiskStatus != "CONFLICT" {
+		t.Fatalf("expected CONFLICT risk status, got %+v", summary)
+	}
+	if summary.ConflictGroups != 1 || len(summary.Conflicts) != 1 {
+		t.Fatalf("expected one conflict group, got %+v", summary)
+	}
+	if summary.Warnings[WarningAmbiguousExternalStopLoss] != 1 {
+		t.Fatalf("expected ambiguous SL warning count, got %+v", summary.Warnings)
+	}
+	if summary.RejectedOrders != 1 || len(summary.RecentRejectedOrders) != 1 {
+		t.Fatalf("expected rejected order summary, got %+v", summary)
+	}
+	if summary.OpenOrders != 2 || len(summary.RecentOpenOrders) != 2 {
+		t.Fatalf("expected two open orders, got %+v", summary)
+	}
+}
+
 func TestLinkAndUnlinkGroupExternalExitOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

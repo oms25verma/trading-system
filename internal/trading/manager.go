@@ -980,6 +980,83 @@ func (m *Manager) ListSyncedPositions() []*KitePosition {
 	return out
 }
 
+func (m *Manager) DashboardSummary() *DashboardSummary {
+	groups := m.ListGroups()
+	trades := m.List()
+	orders := m.ListSyncedOrders()
+	positions := m.ListSyncedPositions()
+
+	summary := &DashboardSummary{
+		RiskStatus:      "OK",
+		ActiveGroups:    len(groups),
+		SyncedOrders:    len(orders),
+		SyncedPositions: len(positions),
+		Warnings:        make(map[string]int),
+	}
+
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		switch group.ManagementStatus {
+		case ManagementStatusManaged:
+			summary.ManagedGroups++
+		case ManagementStatusUnmanaged:
+			summary.UnmanagedGroups++
+			summary.UnmanagedPositions = append(summary.UnmanagedPositions, group)
+		case ManagementStatusConflict:
+			summary.ConflictGroups++
+			summary.Conflicts = append(summary.Conflicts, group)
+		case ManagementStatusPartiallyManaged:
+			summary.WarningGroups++
+			summary.PartiallyManaged = append(summary.PartiallyManaged, group)
+		}
+		if len(group.Warnings) > 0 && group.ManagementStatus != ManagementStatusPartiallyManaged && group.ManagementStatus != ManagementStatusConflict {
+			summary.WarningGroups++
+		}
+		for _, warning := range group.Warnings {
+			summary.Warnings[warning]++
+		}
+	}
+
+	for _, trade := range trades {
+		if isTradeClosed(trade) {
+			summary.ClosedTrades++
+		} else {
+			summary.OpenTrades++
+		}
+	}
+
+	for _, order := range orders {
+		if order == nil {
+			continue
+		}
+		if strings.EqualFold(order.Status, OrderStatusOpen) {
+			summary.OpenOrders++
+			if len(summary.RecentOpenOrders) < 20 {
+				summary.RecentOpenOrders = append(summary.RecentOpenOrders, order)
+			}
+		}
+		if strings.EqualFold(order.Status, OrderStatusRejected) {
+			summary.RejectedOrders++
+			if len(summary.RecentRejectedOrders) < 20 {
+				summary.RecentRejectedOrders = append(summary.RecentRejectedOrders, order)
+			}
+		}
+	}
+
+	if len(summary.Warnings) == 0 {
+		summary.Warnings = nil
+	}
+	switch {
+	case summary.ConflictGroups > 0 || summary.RejectedOrders > 0:
+		summary.RiskStatus = "CONFLICT"
+	case summary.UnmanagedGroups > 0 || summary.WarningGroups > 0:
+		summary.RiskStatus = "WARNING"
+	}
+	return summary
+}
+
 func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	orders, err := m.broker.Orders(ctx)
 	if err != nil {

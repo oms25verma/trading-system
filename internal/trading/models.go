@@ -139,6 +139,27 @@ type PositionGroup struct {
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
+type DashboardSummary struct {
+	RiskStatus           string           `json:"risk_status"`
+	ActiveGroups         int              `json:"active_groups"`
+	ManagedGroups        int              `json:"managed_groups"`
+	UnmanagedGroups      int              `json:"unmanaged_groups"`
+	ConflictGroups       int              `json:"conflict_groups"`
+	WarningGroups        int              `json:"warning_groups"`
+	OpenTrades           int              `json:"open_trades"`
+	ClosedTrades         int              `json:"closed_trades"`
+	OpenOrders           int              `json:"open_orders"`
+	RejectedOrders       int              `json:"rejected_orders"`
+	SyncedOrders         int              `json:"synced_orders"`
+	SyncedPositions      int              `json:"synced_positions"`
+	Warnings             map[string]int   `json:"warnings,omitempty"`
+	Conflicts            []*PositionGroup `json:"conflicts,omitempty"`
+	UnmanagedPositions   []*PositionGroup `json:"unmanaged_positions,omitempty"`
+	PartiallyManaged     []*PositionGroup `json:"partially_managed,omitempty"`
+	RecentOpenOrders     []*KiteOrder     `json:"recent_open_orders,omitempty"`
+	RecentRejectedOrders []*KiteOrder     `json:"recent_rejected_orders,omitempty"`
+}
+
 type StopLoss struct {
 	TriggerPrice float64 `json:"trigger_price"`
 	LimitPrice   float64 `json:"limit_price"`

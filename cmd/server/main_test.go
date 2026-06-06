@@ -84,6 +84,26 @@ func TestTradesListRejectsInvalidPagination(t *testing.T) {
 	}
 }
 
+func TestDashboardRouteReturnsSummary(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var summary trading.DashboardSummary
+	if err := json.NewDecoder(rec.Body).Decode(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.RiskStatus != "OK" || summary.ActiveGroups != 2 || summary.OpenTrades != 2 {
+		t.Fatalf("unexpected dashboard summary: %+v", summary)
+	}
+}
+
 func newHTTPTestManager(t *testing.T) *trading.Manager {
 	t.Helper()
 	manager := trading.NewManager(trading.NewPaperBroker())

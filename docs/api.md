@@ -32,6 +32,41 @@ BROKER
 GET /healthz
 ```
 
+## Dashboard
+
+```http
+GET /dashboard
+```
+
+Returns a compact read-only summary for the first UI screen:
+
+```json
+{
+  "risk_status": "CONFLICT",
+  "active_groups": 1,
+  "managed_groups": 0,
+  "unmanaged_groups": 0,
+  "conflict_groups": 1,
+  "warning_groups": 0,
+  "open_trades": 1,
+  "closed_trades": 0,
+  "open_orders": 2,
+  "rejected_orders": 1,
+  "synced_orders": 3,
+  "synced_positions": 1,
+  "warnings": {
+    "AMBIGUOUS_EXTERNAL_STOP_LOSS": 1
+  },
+  "conflicts": [],
+  "unmanaged_positions": [],
+  "partially_managed": [],
+  "recent_open_orders": [],
+  "recent_rejected_orders": []
+}
+```
+
+`risk_status` is `OK`, `WARNING`, or `CONFLICT`.
+
 ## Kite Auth
 
 ```http

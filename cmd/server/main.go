@@ -114,6 +114,9 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /dashboard", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, manager.DashboardSummary())
+	})
 	mux.HandleFunc("GET /trades", func(w http.ResponseWriter, r *http.Request) {
 		trades := manager.List()
 		if !hasListQuery(r) {
