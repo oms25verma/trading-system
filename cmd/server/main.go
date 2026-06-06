@@ -250,6 +250,22 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		trade, err := manager.RemoveGroupTarget(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
 	})
+	mux.HandleFunc("POST /groups/{id}/external-exit/link", func(w http.ResponseWriter, r *http.Request) {
+		var req trading.ExternalExitLinkRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		trade, err := manager.LinkGroupExternalExitOrder(r.Context(), r.PathValue("id"), req)
+		writeResult(r.Context(), w, trade, err)
+	})
+	mux.HandleFunc("DELETE /groups/{id}/external-exit/link", func(w http.ResponseWriter, r *http.Request) {
+		var req trading.ExternalExitLinkRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		trade, err := manager.UnlinkGroupExternalExitOrder(r.Context(), r.PathValue("id"), req)
+		writeResult(r.Context(), w, trade, err)
+	})
 	mux.HandleFunc("POST /groups/{id}/exit", func(w http.ResponseWriter, r *http.Request) {
 		trade, err := manager.ExitGroup(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)

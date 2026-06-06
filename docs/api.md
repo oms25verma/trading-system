@@ -264,6 +264,32 @@ Ambiguous external SL/target candidates are exposed on position groups:
 }
 ```
 
+Resolve an ambiguous external exit by explicitly linking one synced Kite order:
+
+```http
+POST /groups/{id}/external-exit/link
+Content-Type: application/json
+
+{
+  "order_id": "250603000000000",
+  "role": "stop_loss"
+}
+```
+
+Supported roles are `stop_loss` and `target`. The order must be open, external, opposite-side, same exchange/symbol/product, and match the group quantity. Linked orders are then modified by normal group SL/target APIs.
+
+To clear only the local association without cancelling the Kite order:
+
+```http
+DELETE /groups/{id}/external-exit/link
+Content-Type: application/json
+
+{
+  "order_id": "250603000000000",
+  "role": "stop_loss"
+}
+```
+
 ### Create Trade
 
 ```http

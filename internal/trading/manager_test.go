@@ -1012,6 +1012,99 @@ func TestSyncKiteIgnoresTaggedLocalOrdersForExternalExitConflicts(t *testing.T) 
 	}
 }
 
+func TestLinkAndUnlinkGroupExternalExitOrder(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{OrderID: "ext-sl-1", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 89, TriggerPrice: 90},
+		{OrderID: "ext-sl-2", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 88, TriggerPrice: 89},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err := manager.LinkGroupExternalExitOrder(context.Background(), "NSE:INFY:MIS", ExternalExitLinkRequest{
+		OrderID: "ext-sl-2",
+		Role:    "stop_loss",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID != "ext-sl-2" || trade.StopLoss == nil || trade.StopLoss.TriggerPrice != 89 || trade.StopLoss.LimitPrice != 88 {
+		t.Fatalf("expected manually linked external SL, got %+v", trade)
+	}
+
+	trade, err = manager.AddGroupStopLoss(context.Background(), "NSE:INFY:MIS", StopLossRequest{TriggerPrice: 91, LimitPrice: 90})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID != "ext-sl-2" || broker.modifyCount != 1 {
+		t.Fatalf("expected linked external SL to be modified, got trade=%+v modifyCount=%d", trade, broker.modifyCount)
+	}
+
+	trade, err = manager.UnlinkGroupExternalExitOrder(context.Background(), "NSE:INFY:MIS", ExternalExitLinkRequest{
+		OrderID: "ext-sl-2",
+		Role:    "sl",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.StopOrderID != "" || trade.StopLoss != nil {
+		t.Fatalf("expected external SL to be unlinked locally, got %+v", trade)
+	}
+	if broker.cancelCount != 0 {
+		t.Fatalf("expected unlink to avoid broker cancellation, got %d cancels", broker.cancelCount)
+	}
+}
+
+func TestLinkGroupExternalExitOrderRejectsInvalidOrder(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	_, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{OrderID: "wrong-side-target", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "BUY", Quantity: 1, Product: "MIS", OrderType: "LIMIT", Status: OrderStatusOpen, Price: 120},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = manager.LinkGroupExternalExitOrder(context.Background(), "NSE:INFY:MIS", ExternalExitLinkRequest{
+		OrderID: "wrong-side-target",
+		Role:    "target",
+	})
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "invalid_external_exit_order" {
+		t.Fatalf("expected invalid_external_exit_order, got %v", err)
+	}
+}
+
 func TestEnterWithOnlyStopLossAndOffset(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

@@ -362,6 +362,11 @@ type TargetRequest struct {
 	Price float64 `json:"price"`
 }
 
+type ExternalExitLinkRequest struct {
+	OrderID string `json:"order_id,omitempty"`
+	Role    string `json:"role"`
+}
+
 func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (*ManagedTrade, error) {
 	if req.Price <= 0 {
 		return nil, validationError("missing_price", "price is required")
@@ -715,6 +720,123 @@ func (m *Manager) RemoveGroupTarget(ctx context.Context, groupID string) (*Manag
 		return nil, err
 	}
 	return m.RemoveTarget(ctx, trade.ID)
+}
+
+func (m *Manager) LinkGroupExternalExitOrder(ctx context.Context, groupID string, req ExternalExitLinkRequest) (*ManagedTrade, error) {
+	role, err := normalizeExternalExitRole(req.Role)
+	if err != nil {
+		return nil, err
+	}
+	if req.OrderID == "" {
+		return nil, validationError("missing_order_id", "order_id is required")
+	}
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
+		return nil, err
+	}
+	if err := m.ensureTradeProductCurrent(trade); err != nil {
+		return nil, err
+	}
+
+	m.mu.RLock()
+	order := cloneKiteOrder(m.orders[req.OrderID])
+	m.mu.RUnlock()
+	if order == nil {
+		return nil, notFoundError("order_not_found", "synced order not found; run /sync/kite before linking external orders")
+	}
+	if !isExternalExitCandidate(order, trade, roleToOrderType(role)) {
+		return nil, validationError("invalid_external_exit_order", "order does not match this group's open external exit requirements")
+	}
+	if role == "stop_loss" {
+		if err := validateStopAgainstEntry(trade, order.TriggerPrice); err != nil {
+			return nil, err
+		}
+		if err := validateStopLimit(order.TransactionType, order.TriggerPrice, order.Price); err != nil {
+			return nil, err
+		}
+	} else if err := validateTargetAgainstEntry(trade, order.Price); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	current := m.trades[trade.ID]
+	if current == nil {
+		m.mu.Unlock()
+		return nil, notFoundError("trade_not_found", "linked local trade not found")
+	}
+	if role == "stop_loss" {
+		if current.StopOrderID != "" && current.StopOrderID != order.OrderID {
+			m.mu.Unlock()
+			return nil, conflictError("stop_loss_already_linked", "trade already has a stop-loss order; remove or unlink it before linking another")
+		}
+		current.StopOrderID = order.OrderID
+		current.StopOrderStatus = order.Status
+		current.StopLoss = &StopLoss{TriggerPrice: order.TriggerPrice, LimitPrice: order.Price}
+	} else {
+		if current.TargetOrderID != "" && current.TargetOrderID != order.OrderID {
+			m.mu.Unlock()
+			return nil, conflictError("target_already_linked", "trade already has a target order; remove or unlink it before linking another")
+		}
+		current.TargetOrderID = order.OrderID
+		current.TargetOrderStatus = order.Status
+		current.Target = &Target{Price: order.Price}
+	}
+	current.UpdatedAt = time.Now().UTC()
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	m.logTradeEvent(ctx, "external_"+role+"_manually_linked", result)
+	return result, nil
+}
+
+func (m *Manager) UnlinkGroupExternalExitOrder(ctx context.Context, groupID string, req ExternalExitLinkRequest) (*ManagedTrade, error) {
+	role, err := normalizeExternalExitRole(req.Role)
+	if err != nil {
+		return nil, err
+	}
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	current := m.trades[trade.ID]
+	if current == nil {
+		m.mu.Unlock()
+		return nil, notFoundError("trade_not_found", "linked local trade not found")
+	}
+	if role == "stop_loss" {
+		if req.OrderID != "" && current.StopOrderID != req.OrderID {
+			m.mu.Unlock()
+			return nil, conflictError("stop_loss_order_mismatch", "linked stop-loss order does not match order_id")
+		}
+		current.StopOrderID = ""
+		current.StopOrderStatus = ""
+		current.StopLoss = nil
+		current.PendingStopLoss = nil
+	} else {
+		if req.OrderID != "" && current.TargetOrderID != req.OrderID {
+			m.mu.Unlock()
+			return nil, conflictError("target_order_mismatch", "linked target order does not match order_id")
+		}
+		current.TargetOrderID = ""
+		current.TargetOrderStatus = ""
+		current.Target = nil
+		current.PendingTarget = nil
+	}
+	current.UpdatedAt = time.Now().UTC()
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	m.logTradeEvent(ctx, "external_"+role+"_unlinked", result)
+	return result, nil
 }
 
 func (m *Manager) ExitGroup(ctx context.Context, groupID string) (*ManagedTrade, error) {
@@ -2059,6 +2181,24 @@ func opposite(side string) string {
 		return "SELL"
 	}
 	return "BUY"
+}
+
+func normalizeExternalExitRole(role string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "stop_loss", "stop-loss", "sl":
+		return "stop_loss", nil
+	case "target", "take_profit", "take-profit":
+		return "target", nil
+	default:
+		return "", validationError("invalid_external_exit_role", "role must be stop_loss or target")
+	}
+}
+
+func roleToOrderType(role string) string {
+	if role == "stop_loss" {
+		return "SL"
+	}
+	return "LIMIT"
 }
 
 func validateStopLimit(exitSide string, triggerPrice, limitPrice float64) error {
