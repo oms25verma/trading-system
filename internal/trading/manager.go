@@ -1029,10 +1029,27 @@ func (m *Manager) List() []*ManagedTrade {
 	return out
 }
 
+func (m *Manager) GetTrade(id string) (*ManagedTrade, error) {
+	return m.get(id)
+}
+
 func (m *Manager) ListGroups() []*PositionGroup {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.positionGroupsLocked()
+}
+
+func (m *Manager) GetGroup(id string) (*PositionGroup, error) {
+	id = strings.ToUpper(id)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, group := range m.positionGroupsLocked() {
+		if group.ID == id {
+			return group, nil
+		}
+	}
+	return nil, notFoundError("group_not_found", "position group not found")
 }
 
 func (m *Manager) ListConflicts() []*PositionGroup {
@@ -1060,6 +1077,17 @@ func (m *Manager) ListSyncedOrders() []*KiteOrder {
 	return out
 }
 
+func (m *Manager) GetSyncedOrder(id string) (*KiteOrder, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	order := cloneKiteOrder(m.orders[id])
+	if order == nil {
+		return nil, notFoundError("order_not_found", "synced order not found")
+	}
+	return order, nil
+}
+
 func (m *Manager) ListSyncedPositions() []*KitePosition {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1072,6 +1100,18 @@ func (m *Manager) ListSyncedPositions() []*KitePosition {
 		return positionKey(out[i].Exchange, out[i].TradingSymbol, out[i].Product) < positionKey(out[j].Exchange, out[j].TradingSymbol, out[j].Product)
 	})
 	return out
+}
+
+func (m *Manager) GetSyncedPosition(id string) (*KitePosition, error) {
+	id = strings.ToUpper(id)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	position := cloneKitePosition(m.positions[id])
+	if position == nil {
+		return nil, notFoundError("position_not_found", "synced position not found")
+	}
+	return position, nil
 }
 
 func (m *Manager) DashboardSummary() *DashboardSummary {

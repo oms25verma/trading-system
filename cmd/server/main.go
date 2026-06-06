@@ -125,6 +125,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		}
 		writePagedResult(r.Context(), w, r, filterTrades(trades, r))
 	})
+	mux.HandleFunc("GET /trades/{id}", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.GetTrade(r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
 	mux.HandleFunc("GET /groups", func(w http.ResponseWriter, r *http.Request) {
 		groups := manager.ListGroups()
 		if !hasListQuery(r) {
@@ -132,6 +136,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			return
 		}
 		writePagedResult(r.Context(), w, r, filterGroups(groups, r))
+	})
+	mux.HandleFunc("GET /groups/{id}", func(w http.ResponseWriter, r *http.Request) {
+		group, err := manager.GetGroup(r.PathValue("id"))
+		writeResult(r.Context(), w, group, err)
 	})
 	mux.HandleFunc("GET /conflicts", func(w http.ResponseWriter, r *http.Request) {
 		groups := manager.ListConflicts()
@@ -149,6 +157,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		}
 		writePagedResult(r.Context(), w, r, filterOrders(orders, r))
 	})
+	mux.HandleFunc("GET /orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		order, err := manager.GetSyncedOrder(r.PathValue("id"))
+		writeResult(r.Context(), w, order, err)
+	})
 	mux.HandleFunc("GET /positions", func(w http.ResponseWriter, r *http.Request) {
 		positions := manager.ListSyncedPositions()
 		if !hasListQuery(r) {
@@ -156,6 +168,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			return
 		}
 		writePagedResult(r.Context(), w, r, filterPositions(positions, r))
+	})
+	mux.HandleFunc("GET /positions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		position, err := manager.GetSyncedPosition(r.PathValue("id"))
+		writeResult(r.Context(), w, position, err)
 	})
 	mux.HandleFunc("POST /sync/kite", func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.SyncKite(r.Context())

@@ -1116,6 +1116,40 @@ func TestListConflictsReturnsGroupsNeedingAttention(t *testing.T) {
 	}
 }
 
+func TestDetailGettersReturnSyncedState(t *testing.T) {
+	broker := newFakeBroker()
+	broker.synced = []KiteOrder{
+		{OrderID: "order-1", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "BUY", Quantity: 1, Product: "MIS", OrderType: "MARKET", Status: OrderStatusComplete},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	manager := NewManager(broker)
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	order, err := manager.GetSyncedOrder("order-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.OrderID != "order-1" || order.TradingSymbol != "INFY" {
+		t.Fatalf("unexpected order detail: %+v", order)
+	}
+	position, err := manager.GetSyncedPosition("nse:infy:mis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position.TradingSymbol != "INFY" || position.Quantity != 1 {
+		t.Fatalf("unexpected position detail: %+v", position)
+	}
+	group, err := manager.GetGroup("nse:infy:mis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.ID != "NSE:INFY:MIS" || group.ManagementStatus != ManagementStatusUnmanaged {
+		t.Fatalf("unexpected group detail: %+v", group)
+	}
+}
+
 func TestLinkAndUnlinkGroupExternalExitOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

@@ -124,6 +124,59 @@ func TestConflictsRouteReturnsAttentionGroups(t *testing.T) {
 	}
 }
 
+func TestTradeDetailRouteReturnsTrade(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/trades/gold-buy", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var trade trading.ManagedTrade
+	if err := json.NewDecoder(rec.Body).Decode(&trade); err != nil {
+		t.Fatal(err)
+	}
+	if trade.ID != "gold-buy" || trade.TradingSymbol != "GOLDM26JUNFUT" {
+		t.Fatalf("unexpected trade detail: %+v", trade)
+	}
+}
+
+func TestGroupDetailRouteReturnsGroup(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/groups/MCX:GOLDM26JUNFUT:MIS", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var group trading.PositionGroup
+	if err := json.NewDecoder(rec.Body).Decode(&group); err != nil {
+		t.Fatal(err)
+	}
+	if group.ID != "MCX:GOLDM26JUNFUT:MIS" || group.Quantity != 1 {
+		t.Fatalf("unexpected group detail: %+v", group)
+	}
+}
+
+func TestDetailRouteReturnsNotFound(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/trades/missing", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func newHTTPTestManager(t *testing.T) *trading.Manager {
 	t.Helper()
 	manager := trading.NewManager(trading.NewPaperBroker())

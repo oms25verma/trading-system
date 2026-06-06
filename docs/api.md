@@ -125,6 +125,7 @@ This endpoint is always available as a force refresh. Automatic background sync 
 
 ```http
 GET /orders
+GET /orders/{order_id}
 ```
 
 Returns the latest locally synced orderbook snapshot. `creation_source` is inferred from Kite `tag`:
@@ -145,6 +146,7 @@ GET /orders?status=OPEN&creation_source=LOCAL_SYSTEM&page=1&page_size=50&sort_by
 
 ```http
 GET /positions
+GET /positions/{exchange}:{tradingsymbol}:{product}
 ```
 
 Returns the latest locally synced Kite net position snapshot.
@@ -161,6 +163,7 @@ GET /positions?exchange=MCX&symbol=SILVERM26JUNFUT&page=1&page_size=50
 
 ```http
 GET /trades
+GET /trades/{id}
 ```
 
 Without query parameters this returns the original plain JSON array. With query parameters it returns:
@@ -191,6 +194,7 @@ GET /trades?status=OPEN&side=BUY&product=MIS&page=1&page_size=50&sort_by=updated
 
 ```http
 GET /groups
+GET /groups/{exchange}:{tradingsymbol}:{product}
 ```
 
 Groups merge open local trades with the latest synced Kite net positions and are keyed by `exchange + tradingsymbol + product`. Synced Kite-only positions appear as `UNMANAGED` so the UI can surface them before local SL/target management is added.
