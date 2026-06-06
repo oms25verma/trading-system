@@ -34,6 +34,7 @@ const (
 	ExitReasonStopLoss       = "STOP_LOSS"
 	ExitReasonTarget         = "TARGET"
 	ExitReasonBothCompleted  = "BOTH_COMPLETED"
+	ExitReasonEntryCancelled = "ENTRY_CANCELLED"
 
 	OrderStatusOpen      = "OPEN"
 	OrderStatusComplete  = "COMPLETE"

@@ -567,6 +567,19 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	if err := m.ensureTradeProductCurrent(trade); err != nil {
 		return nil, err
 	}
+	if !strings.EqualFold(trade.EntryStatus, OrderStatusComplete) {
+		status, err := m.broker.OrderStatus(ctx, "regular", trade.EntryOrderID)
+		if err != nil {
+			return nil, fmt.Errorf("entry order status check failed before exit: %w", err)
+		}
+		if !strings.EqualFold(status, OrderStatusComplete) {
+			return m.CancelEntry(ctx, id)
+		}
+		if err := m.updateEntryStatus(id, OrderStatusComplete); err != nil {
+			return nil, err
+		}
+		trade.EntryStatus = OrderStatusComplete
+	}
 
 	if trade.StopOrderID != "" {
 		if err := m.broker.CancelOrder(ctx, "regular", trade.StopOrderID); err != nil {
@@ -620,6 +633,68 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 		return nil, err
 	}
 	m.logTradeEvent(ctx, "trade_manual_exit", result)
+	return result, nil
+}
+
+func (m *Manager) CancelEntry(ctx context.Context, id string) (*ManagedTrade, error) {
+	trade, err := m.get(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(trade.EntryStatus, OrderStatusComplete) {
+		return nil, conflictError("entry_already_complete", "entry order is complete; use exit to square off the position")
+	}
+	if trade.EntryOrderID == "" {
+		return nil, validationError("missing_entry_order_id", "entry_order_id is required")
+	}
+
+	status, err := m.broker.OrderStatus(ctx, "regular", trade.EntryOrderID)
+	if err != nil {
+		return nil, fmt.Errorf("entry order status check failed before cancel: %w", err)
+	}
+	status = strings.ToUpper(status)
+	switch status {
+	case OrderStatusComplete:
+		if err := m.updateEntryStatus(id, OrderStatusComplete); err != nil {
+			return nil, err
+		}
+		return nil, conflictError("entry_already_complete", "entry order is complete; use exit to square off the position")
+	case OrderStatusOpen:
+		if err := m.broker.CancelOrder(ctx, "regular", trade.EntryOrderID); err != nil {
+			return nil, err
+		}
+		status = OrderStatusCancelled
+	case OrderStatusCancelled, OrderStatusRejected:
+	default:
+		return nil, conflictError("entry_not_cancellable", fmt.Sprintf("entry order status %s cannot be cancelled", status))
+	}
+
+	m.mu.Lock()
+	current := m.trades[id]
+	current.EntryStatus = status
+	current.TradeStatus = TradeStatusClosed
+	current.ExitReason = ExitReasonEntryCancelled
+	now := time.Now().UTC()
+	current.ClosedAt = &now
+	current.StopOrderID = ""
+	current.StopOrderStatus = ""
+	current.TargetOrderID = ""
+	current.TargetOrderStatus = ""
+	current.StopLoss = nil
+	current.Target = nil
+	current.PendingProtection = nil
+	current.PendingStopLoss = nil
+	current.PendingTarget = nil
+	current.UpdatedAt = now
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	m.logTradeEvent(ctx, "entry_cancelled", result)
 	return result, nil
 }
 
@@ -845,6 +920,14 @@ func (m *Manager) ExitGroup(ctx context.Context, groupID string) (*ManagedTrade,
 		return nil, err
 	}
 	return m.Exit(ctx, trade.ID)
+}
+
+func (m *Manager) CancelGroupEntry(ctx context.Context, groupID string) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.CancelEntry(ctx, trade.ID)
 }
 
 func (m *Manager) TakeOverGroup(ctx context.Context, groupID string, req TakeOverGroupRequest) (*ManagedTrade, error) {

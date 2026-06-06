@@ -79,7 +79,7 @@ For a group with exactly one open local trade, sync reconciliation automatically
 
 Sync also detects unambiguous product conversions such as `MIS -> NRML`. Converted groups are flagged, and stale-product SL/target/exit actions are blocked until you call `POST /trades/{id}/product-conversion/apply`. For a single-trade group, that endpoint migrates the local product and recreates existing protection orders under the new product.
 
-For a managed group with one linked local trade, UI actions can use `/groups/{id}/stop-loss`, `/groups/{id}/target`, and `/groups/{id}/exit`. External-only and multi-trade groups return explicit conflicts until take-over and group-allocation workflows are added.
+For a managed group with one linked local trade, UI actions can use `/groups/{id}/stop-loss`, `/groups/{id}/target`, `/groups/{id}/exit`, and `/groups/{id}/cancel-entry`. External-only and multi-trade groups return explicit conflicts until take-over and group-allocation workflows are added.
 
 Use `POST /groups/{id}/take-over` for a synced external-only position. It creates a local management record without placing another entry order, then enables the normal group SL/target/exit APIs.
 
@@ -198,10 +198,16 @@ For an open `LIMIT` entry, these APIs clear `pending_stop_loss` or `pending_targ
 
 ## Exit a trade
 
-This cancels attached stop-loss and target orders, then places a market order in the opposite direction.
+For completed entries, this cancels attached stop-loss and target orders, then places a market order in the opposite direction. For open `LIMIT` entries that are not filled yet, it cancels the pending entry and closes the local trade with `exit_reason` set to `ENTRY_CANCELLED`.
 
 ```bash
 curl -X POST http://localhost:8080/trades/<id>/exit
+```
+
+You can also cancel an unfilled entry explicitly:
+
+```bash
+curl -X POST http://localhost:8080/trades/<id>/cancel-entry
 ```
 
 ## OCO behavior

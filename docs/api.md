@@ -255,6 +255,7 @@ DELETE /groups/{id}/stop-loss
 POST   /groups/{id}/target
 DELETE /groups/{id}/target
 POST   /groups/{id}/exit
+POST   /groups/{id}/cancel-entry
 ```
 
 Request bodies match the equivalent trade-level APIs. These endpoints delegate to the existing validated trade workflow.
@@ -459,7 +460,15 @@ Cancels live Kite target orders or clears pending local target state.
 POST /trades/{id}/exit
 ```
 
-Cancels SL/target and places a market order in the opposite direction.
+For completed entries, cancels SL/target and places a market order in the opposite direction.
+
+For open `LIMIT` entries that are not filled yet, this safely cancels the pending entry order instead of placing a reverse market order. The trade is closed locally with `exit_reason: "ENTRY_CANCELLED"`.
+
+You can also explicitly cancel an unfilled entry order:
+
+```http
+POST /trades/{id}/cancel-entry
+```
 
 ## Current Background Behavior
 

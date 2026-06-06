@@ -1309,6 +1309,74 @@ func TestLimitEntryDefersProtectionUntilComplete(t *testing.T) {
 	}
 }
 
+func TestExitCancelsOpenLimitEntryInsteadOfPlacingReverseMarketOrder(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "LIMIT",
+		Price:         100,
+		Protection: &AutoProtectionRequest{
+			StopLossPoints: 10,
+			TargetPoints:   20,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.Exit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitReason != ExitReasonEntryCancelled {
+		t.Fatalf("expected entry-cancelled closed trade, got %+v", trade)
+	}
+	if trade.EntryStatus != OrderStatusCancelled {
+		t.Fatalf("expected entry status cancelled, got %s", trade.EntryStatus)
+	}
+	if trade.ExitOrderID != "" {
+		t.Fatalf("expected no reverse market exit order, got %s", trade.ExitOrderID)
+	}
+	if trade.PendingProtection != nil || trade.PendingStopLoss != nil || trade.PendingTarget != nil {
+		t.Fatalf("expected pending protection cleared, got %+v", trade)
+	}
+	if broker.placeCount != 1 || broker.cancelCount != 1 {
+		t.Fatalf("expected one entry place and one cancel, got place=%d cancel=%d", broker.placeCount, broker.cancelCount)
+	}
+}
+
+func TestCancelEntryRejectsCompletedEntry(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = manager.CancelEntry(context.Background(), trade.ID)
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "entry_already_complete" {
+		t.Fatalf("expected entry_already_complete, got %v", err)
+	}
+	if broker.cancelCount != 0 {
+		t.Fatalf("expected no broker cancel for completed entry, got %d", broker.cancelCount)
+	}
+}
+
 func TestManualStopLossForOpenLimitEntryIsDeferred(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
