@@ -67,6 +67,20 @@ Returns a compact read-only summary for the first UI screen:
 
 `risk_status` is `OK`, `WARNING`, or `CONFLICT`.
 
+## Conflicts
+
+```http
+GET /conflicts
+```
+
+Returns position groups that need operator attention: `CONFLICT`, `UNMANAGED`, `PARTIALLY_MANAGED`, or any group with warnings. This is the dedicated queue for the UI's action-required screen.
+
+It supports the same pagination, filtering, and sorting query parameters as `GET /groups`:
+
+```http
+GET /conflicts?page=1&page_size=50&sort_by=updated_at&sort_dir=desc
+```
+
 ## Kite Auth
 
 ```http

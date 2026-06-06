@@ -7,6 +7,7 @@ This is a small starter service for managing trades through a broker adapter. It
 - add/remove target orders
 - active position groups from current local trades
 - dashboard summary for counts, conflicts, warnings, and active orders
+- conflict queue for groups that need operator attention
 - app-managed trailing stop-loss by polling LTP and modifying the stop order
 - paper broker mode for local testing
 - Kite HTTP adapter using Kite Connect v3 endpoints

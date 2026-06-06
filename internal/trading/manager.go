@@ -1035,6 +1035,17 @@ func (m *Manager) ListGroups() []*PositionGroup {
 	return m.positionGroupsLocked()
 }
 
+func (m *Manager) ListConflicts() []*PositionGroup {
+	groups := m.ListGroups()
+	out := make([]*PositionGroup, 0)
+	for _, group := range groups {
+		if groupNeedsAttention(group) {
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
 func (m *Manager) ListSyncedOrders() []*KiteOrder {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1138,6 +1149,16 @@ func (m *Manager) DashboardSummary() *DashboardSummary {
 		summary.RiskStatus = "WARNING"
 	}
 	return summary
+}
+
+func groupNeedsAttention(group *PositionGroup) bool {
+	if group == nil {
+		return false
+	}
+	return group.ManagementStatus == ManagementStatusConflict ||
+		group.ManagementStatus == ManagementStatusUnmanaged ||
+		group.ManagementStatus == ManagementStatusPartiallyManaged ||
+		len(group.Warnings) > 0
 }
 
 func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {

@@ -104,6 +104,26 @@ func TestDashboardRouteReturnsSummary(t *testing.T) {
 	}
 }
 
+func TestConflictsRouteReturnsAttentionGroups(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/conflicts", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var conflicts []trading.PositionGroup
+	if err := json.NewDecoder(rec.Body).Decode(&conflicts); err != nil {
+		t.Fatal(err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("expected no conflicts in fixture, got %+v", conflicts)
+	}
+}
+
 func newHTTPTestManager(t *testing.T) *trading.Manager {
 	t.Helper()
 	manager := trading.NewManager(trading.NewPaperBroker())

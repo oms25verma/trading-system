@@ -1083,6 +1083,39 @@ func TestDashboardSummaryReportsConflictsAndRejectedOrders(t *testing.T) {
 	}
 }
 
+func TestListConflictsReturnsGroupsNeedingAttention(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-entry",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	broker.synced = []KiteOrder{
+		{OrderID: "ext-sl-1", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 89, TriggerPrice: 90},
+		{OrderID: "ext-sl-2", Exchange: "NSE", TradingSymbol: "INFY", TransactionType: "SELL", Quantity: 1, Product: "MIS", OrderType: "SL", Status: OrderStatusOpen, Price: 88, TriggerPrice: 89},
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+	if _, err := manager.SyncKite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	conflicts := manager.ListConflicts()
+	if len(conflicts) != 1 {
+		t.Fatalf("expected one conflict group, got %d: %+v", len(conflicts), conflicts)
+	}
+	if conflicts[0].ID != "NSE:INFY:MIS" || conflicts[0].ManagementStatus != ManagementStatusConflict {
+		t.Fatalf("unexpected conflict group: %+v", conflicts[0])
+	}
+}
+
 func TestLinkAndUnlinkGroupExternalExitOrder(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

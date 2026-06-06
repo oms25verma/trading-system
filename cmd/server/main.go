@@ -133,6 +133,14 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		}
 		writePagedResult(r.Context(), w, r, filterGroups(groups, r))
 	})
+	mux.HandleFunc("GET /conflicts", func(w http.ResponseWriter, r *http.Request) {
+		groups := manager.ListConflicts()
+		if !hasListQuery(r) {
+			writeJSON(w, http.StatusOK, groups)
+			return
+		}
+		writePagedResult(r.Context(), w, r, filterGroups(groups, r))
+	})
 	mux.HandleFunc("GET /orders", func(w http.ResponseWriter, r *http.Request) {
 		orders := manager.ListSyncedOrders()
 		if !hasListQuery(r) {
