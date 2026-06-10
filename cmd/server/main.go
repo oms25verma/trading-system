@@ -534,14 +534,34 @@ func writeError(ctx context.Context, w http.ResponseWriter, err error) {
 		status = http.StatusBadGateway
 	}
 
-	slog.WarnContext(ctx, "api_error",
+	logAPIError(ctx, status, response)
+	writeJSON(w, status, response)
+}
+
+func logAPIError(ctx context.Context, status int, response apiError) {
+	args := []any{
 		"request_id", observability.RequestID(ctx),
 		"status", status,
 		"kind", response.Kind,
 		"code", response.Code,
 		"message", response.Message,
-	)
-	writeJSON(w, status, response)
+	}
+	if isExpectedAPIRejection(response) {
+		slog.InfoContext(ctx, "api_request_rejected", args...)
+		return
+	}
+	slog.WarnContext(ctx, "api_error", args...)
+}
+
+func isExpectedAPIRejection(response apiError) bool {
+	switch response.Kind {
+	case string(trading.ErrorKindValidation), string(trading.ErrorKindNotFound), string(trading.ErrorKindConflict), string(trading.ErrorKindClosed):
+		return true
+	case "BROKER":
+		return response.Code == "kite_input"
+	default:
+		return false
+	}
 }
 
 func brokerErrorCode(err *kite.APIError) string {

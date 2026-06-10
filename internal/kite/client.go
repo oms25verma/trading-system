@@ -391,6 +391,10 @@ func (c *Client) logBrokerResponse(ctx context.Context, method, path string, sta
 	}
 	if failed {
 		args = append(args, "response_body", safeResponseBody(payload))
+		if isExpectedBrokerRejection(statusCode, payload) {
+			c.logger.InfoContext(ctx, "broker_request_rejected", args...)
+			return
+		}
 		c.logger.WarnContext(ctx, "broker_request_failed", args...)
 		return
 	}
@@ -442,6 +446,19 @@ func safeResponseBody(payload []byte) string {
 		return body[:limit] + "...[truncated]"
 	}
 	return body
+}
+
+func isExpectedBrokerRejection(statusCode int, payload []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	var parsed struct {
+		ErrorType string `json:"error_type"`
+	}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.ErrorType, "InputException")
 }
 
 func kiteAPIError(method, path string, statusCode int, payload []byte) error {

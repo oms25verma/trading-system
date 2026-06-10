@@ -545,7 +545,7 @@ error
 
 Lifecycle events include trade creation/import, SL/target create/modify/remove, manual exit, OCO/external close, reconciliation events, API errors, broker selection, and server startup.
 
-Warnings and errors are also copied into `ERROR_LOG_PATH`. The file is recreated with truncate-on-start behavior, so after every server restart it contains only the current server run. This is the quickest file to inspect after a failed order, sync, reconciliation, or broker call.
+Warnings and errors are also copied into `ERROR_LOG_PATH`. The file is recreated with truncate-on-start behavior, so after every server restart it contains only the current server run. Expected validation rejects and Kite `InputException` order rejects remain in stdout with request ids, while permission/auth/network/server failures stay in the error file.
 
 ## Request Correlation
 

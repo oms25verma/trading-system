@@ -172,6 +172,9 @@ func (m *Manager) Enter(ctx context.Context, req CreateTradeRequest) (*ManagedTr
 		Tag:              LocalSystemOrderTag,
 	})
 	if err != nil {
+		if isAMORequiredError(err) {
+			return nil, marketClosedAMOError("entry")
+		}
 		return nil, err
 	}
 
@@ -324,6 +327,9 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 			Tag:             LocalSystemOrderTag,
 		})
 		if err != nil {
+			if isAMORequiredError(err) {
+				return nil, marketClosedAMOError("stop-loss")
+			}
 			return nil, err
 		}
 	} else {
@@ -334,6 +340,9 @@ func (m *Manager) AddStopLoss(ctx context.Context, id string, req StopLossReques
 			"price":         money(req.LimitPrice),
 		})
 		if err != nil {
+			if isAMORequiredError(err) {
+				return nil, marketClosedAMOError("stop-loss")
+			}
 			return nil, err
 		}
 	}
@@ -409,6 +418,9 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 			Tag:             LocalSystemOrderTag,
 		})
 		if err != nil {
+			if isAMORequiredError(err) {
+				return nil, marketClosedAMOError("target")
+			}
 			return nil, err
 		}
 	} else {
@@ -418,6 +430,9 @@ func (m *Manager) AddTarget(ctx context.Context, id string, req TargetRequest) (
 			"price":      money(req.Price),
 		})
 		if err != nil {
+			if isAMORequiredError(err) {
+				return nil, marketClosedAMOError("target")
+			}
 			return nil, err
 		}
 	}
@@ -595,10 +610,7 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	})
 	if err != nil {
 		if isAMORequiredError(err) {
-			return nil, conflictError(
-				"market_closed_amo_required",
-				"regular exit order was rejected because the market is closed; the position is still open. Try exiting during market hours, or use an explicit AMO exit flow when you want to queue the square-off for the next session.",
-			)
+			return nil, marketClosedAMOError("exit")
 		}
 		return nil, err
 	}
@@ -2664,7 +2676,32 @@ func isAMORequiredError(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "switch_to_amo") ||
 		strings.Contains(message, "after market order") ||
-		strings.Contains(message, "amo")
+		strings.Contains(message, "converted to a after market order")
+}
+
+func marketClosedAMOError(action string) error {
+	switch action {
+	case "entry":
+		return conflictError(
+			"market_closed_amo_required",
+			"regular entry order was rejected because the market is closed; try placing the trade during market hours",
+		)
+	case "stop-loss":
+		return conflictError(
+			"market_closed_amo_required",
+			"regular stop-loss order was rejected because the market is closed; add or modify protection during market hours after the position is active",
+		)
+	case "target":
+		return conflictError(
+			"market_closed_amo_required",
+			"regular target order was rejected because the market is closed; add or modify protection during market hours after the position is active",
+		)
+	default:
+		return conflictError(
+			"market_closed_amo_required",
+			"regular exit order was rejected because the market is closed; the position is still open. Try exiting during market hours, or use an explicit AMO exit flow when you want to queue the square-off for the next session.",
+		)
+	}
 }
 
 func cloneKitePosition(position *KitePosition) *KitePosition {
@@ -2776,11 +2813,17 @@ func validateAutoProtectionRequest(exchange, side string, orderPrice float64, re
 	if req.StopLossPoints > 0 {
 		triggerPrice, limitPrice := stopPrices(exchange, side, referencePrice, req.StopLossPoints, req.SLLimitOffset)
 		if triggerPrice <= 0 || limitPrice <= 0 {
-			return validationError("invalid_computed_stop_loss", "computed stop-loss trigger_price and limit_price must be positive")
+			return validationError(
+				"invalid_computed_stop_loss",
+				fmt.Sprintf("stop_loss_points/sl_limit_offset create a non-positive stop-loss price for %s reference_price %.2f", side, referencePrice),
+			)
 		}
 	}
 	if req.TargetPoints > 0 && targetPrice(side, referencePrice, req.TargetPoints) <= 0 {
-		return validationError("invalid_computed_target", "computed target price must be positive")
+		return validationError(
+			"invalid_computed_target",
+			fmt.Sprintf("target_points creates a non-positive target price for %s reference_price %.2f", side, referencePrice),
+		)
 	}
 	return nil
 }

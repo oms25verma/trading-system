@@ -695,11 +695,18 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     },
   });
   const [withProtection, setWithProtection] = useState(true);
+  const [formError, setFormError] = useState('');
 
   function submit() {
     const body = { ...form, tradingsymbol: form.tradingsymbol.trim().toUpperCase() };
     if (!withProtection) delete body.protection;
     if (body.order_type === 'MARKET') delete body.price;
+    const validationError = validateCreateTradeForm(body, withProtection);
+    if (validationError) {
+      setFormError(validationError);
+      return;
+    }
+    setFormError('');
     return props.onRun('Created trade', () => api.createTrade(body));
   }
 
@@ -732,7 +739,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         </>
       )}
       <Segmented label="Side" value={form.side} options={['BUY', 'SELL']} onChange={(side) => setForm({ ...form, side: side as Side })} />
-      <Input label="Quantity" type="number" value={form.quantity} onChange={(quantity) => setForm({ ...form, quantity: Number(quantity) })} />
+      <Input label="Quantity" type="number" min={1} step={1} value={form.quantity} onChange={(quantity) => setForm({ ...form, quantity: Number(quantity) })} />
       {watchlist.length > 0 ? (
         <div className="selected-box">
           <strong>{form.exchange}:{form.tradingsymbol}</strong>
@@ -742,20 +749,21 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         <Select label="Product" value={form.product} options={props.metadata?.enums.products ?? ['MIS', 'NRML']} onChange={(product) => setForm({ ...form, product })} />
       )}
       <Select label="Order Type" value={form.order_type} options={['MARKET', 'LIMIT']} onChange={(order_type) => setForm({ ...form, order_type })} />
-      {form.order_type === 'LIMIT' && <Input label="Limit Price" type="number" value={form.price ?? ''} onChange={(price) => setForm({ ...form, price: Number(price) })} />}
+      {form.order_type === 'LIMIT' && <Input label="Limit Price" type="number" min={0} step="0.05" value={form.price ?? ''} onChange={(price) => setForm({ ...form, price: Number(price) })} />}
       <label className="check-row">
         <input type="checkbox" checked={withProtection} onChange={(event) => setWithProtection(event.target.checked)} />
         <span>Protection</span>
       </label>
       {withProtection && (
         <div className="form-grid two">
-          <Input label="Reference Price" type="number" value={form.protection?.reference_price ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, reference_price: optionalNumber(value) } })} />
-          <Input label="SL Points" type="number" value={form.protection?.stop_loss_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, stop_loss_points: optionalNumber(value) } })} />
-          <Input label="Target Points" type="number" value={form.protection?.target_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, target_points: optionalNumber(value) } })} />
-          <Input label="SL Offset" type="number" value={form.protection?.sl_limit_offset ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, sl_limit_offset: optionalNumber(value) } })} />
-          <Input label="Trail By" type="number" value={form.protection?.trail_by ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, trail_by: optionalNumber(value) } })} />
+          <Input label="Reference Price" type="number" min={0} step="0.05" value={form.protection?.reference_price ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, reference_price: optionalNumber(value) } })} />
+          <Input label="SL Points" type="number" min={0} step="0.05" value={form.protection?.stop_loss_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, stop_loss_points: optionalNumber(value) } })} />
+          <Input label="Target Points" type="number" min={0} step="0.05" value={form.protection?.target_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, target_points: optionalNumber(value) } })} />
+          <Input label="SL Offset" type="number" min={0} step="0.05" value={form.protection?.sl_limit_offset ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, sl_limit_offset: optionalNumber(value) } })} />
+          <Input label="Trail By" type="number" min={0} step="0.05" value={form.protection?.trail_by ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, trail_by: optionalNumber(value) } })} />
         </div>
       )}
+      {formError && <p className="form-error">{formError}</p>}
       <button className="icon-text-button primary form-submit" type="submit"><Plus /> Create</button>
     </FormShell>
   );
@@ -773,9 +781,9 @@ function StopLossForm(props: { action: Extract<Action, { type: 'stop-loss' }>; o
   }
   return (
     <FormShell onSubmit={submit}>
-      <Input label="Trigger Price" type="number" value={form.trigger_price || ''} onChange={(value) => setForm({ ...form, trigger_price: Number(value) })} />
-      <Input label="Limit Price" type="number" value={form.limit_price || ''} onChange={(value) => setForm({ ...form, limit_price: Number(value) })} />
-      <Input label="Trail By" type="number" value={form.trail_by ?? ''} onChange={(value) => setForm({ ...form, trail_by: Number(value) })} />
+      <Input label="Trigger Price" type="number" min={0} step="0.05" value={form.trigger_price || ''} onChange={(value) => setForm({ ...form, trigger_price: Number(value) })} />
+      <Input label="Limit Price" type="number" min={0} step="0.05" value={form.limit_price || ''} onChange={(value) => setForm({ ...form, limit_price: Number(value) })} />
+      <Input label="Trail By" type="number" min={0} step="0.05" value={form.trail_by ?? ''} onChange={(value) => setForm({ ...form, trail_by: Number(value) })} />
       <button className="icon-text-button primary form-submit" type="submit"><Shield /> Save SL</button>
     </FormShell>
   );
@@ -793,7 +801,7 @@ function TargetForm(props: { action: Extract<Action, { type: 'target' }>; onRun:
   }
   return (
     <FormShell onSubmit={submit}>
-      <Input label="Target Price" type="number" value={form.price || ''} onChange={(value) => setForm({ price: Number(value) })} />
+      <Input label="Target Price" type="number" min={0} step="0.05" value={form.price || ''} onChange={(value) => setForm({ price: Number(value) })} />
       <button className="icon-text-button primary form-submit" type="submit"><Target /> Save Target</button>
     </FormShell>
   );
@@ -807,7 +815,7 @@ function TakeOverForm(props: { group: PositionGroup; onRun: (label: string, fn: 
         <strong>{props.group.id}</strong>
         <span>{props.group.side} {props.group.quantity}</span>
       </div>
-      <Input label="Entry Price" type="number" value={entryPrice} onChange={setEntryPrice} />
+      <Input label="Entry Price" type="number" min={0} step="0.05" value={entryPrice} onChange={setEntryPrice} />
       <button className="icon-text-button primary form-submit" type="submit"><ArrowDownToLine /> Take Over</button>
     </FormShell>
   );
@@ -878,11 +886,11 @@ function Pager<T>(props: { page: PageResult<T>; state: TableState; onChange: (st
   );
 }
 
-function Input(props: { label: string; value: string | number; type?: string; onChange: (value: string) => void }) {
+function Input(props: { label: string; value: string | number; type?: string; min?: number; step?: number | string; onChange: (value: string) => void }) {
   return (
     <label className="field">
       <span>{props.label}</span>
-      <input type={props.type ?? 'text'} value={props.value} onChange={(event) => props.onChange(event.target.value)} />
+      <input type={props.type ?? 'text'} min={props.min} step={props.step} value={props.value} onChange={(event) => props.onChange(event.target.value)} />
     </label>
   );
 }
@@ -1099,6 +1107,43 @@ function optionalNumber(value: string) {
   return value === '' ? undefined : Number(value);
 }
 
+function validateCreateTradeForm(body: CreateTradeRequest, withProtection: boolean) {
+  if (!body.exchange.trim() || !body.tradingsymbol.trim()) return 'Exchange and symbol are required.';
+  if (!Number.isFinite(body.quantity) || body.quantity <= 0) return 'Quantity must be positive.';
+  if (body.order_type === 'LIMIT' && (!Number.isFinite(body.price ?? 0) || (body.price ?? 0) <= 0)) {
+    return 'Limit price must be positive.';
+  }
+  if (!withProtection || !body.protection) return '';
+
+  const protection = body.protection;
+  const values: Array<[string, number | undefined]> = [
+    ['Reference price', protection.reference_price],
+    ['SL points', protection.stop_loss_points],
+    ['Target points', protection.target_points],
+    ['SL offset', protection.sl_limit_offset],
+    ['Trail by', protection.trail_by],
+  ];
+  for (const [label, value] of values) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+      return `${label} cannot be negative.`;
+    }
+  }
+
+  const referencePrice = protection.reference_price || body.price || 0;
+  if (referencePrice <= 0) return '';
+
+  const stopLossPoints = protection.stop_loss_points ?? 0;
+  const targetPoints = protection.target_points ?? 0;
+  const slOffset = protection.sl_limit_offset ?? 0;
+  if (body.side === 'BUY' && stopLossPoints > 0 && (referencePrice - stopLossPoints <= 0 || referencePrice - stopLossPoints - slOffset <= 0)) {
+    return 'SL points/offset are too large for the reference price.';
+  }
+  if (body.side === 'SELL' && targetPoints > 0 && referencePrice - targetPoints <= 0) {
+    return 'Target points are too large for the reference price.';
+  }
+  return '';
+}
+
 function orderMillis(order: KiteOrder) {
   const value = order.order_timestamp || order.synced_at;
   const millis = Date.parse(value);
@@ -1143,7 +1188,7 @@ function dash(value: string) {
 function errorMessage(err: unknown) {
   if (err instanceof ApiError) {
     if (err.body?.code === 'market_closed_amo_required') {
-      return 'Market is closed for regular exit. Use Queue AMO Exit only if you want to place the square-off for the next session.';
+      return err.message;
     }
     return `${err.body?.code ?? err.status}: ${err.message}`;
   }

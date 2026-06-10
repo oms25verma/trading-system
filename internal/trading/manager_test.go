@@ -411,6 +411,66 @@ func TestExitMapsAMORequiredBrokerErrorAndKeepsTradeOpen(t *testing.T) {
 	}
 }
 
+func TestEnterMapsAMORequiredBrokerError(t *testing.T) {
+	broker := newFakeBroker()
+	broker.placeErr = errors.New(`kite POST /orders/regular failed: status=400 body={"status":"error","message":"Your order could not be converted to a After Market Order (AMO).","data":{"hints":["switch_to_amo"]},"error_type":"InputException"}`)
+	manager := NewManager(broker)
+
+	_, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NFO",
+		TradingSymbol: "NIFTY2661623550PE",
+		Side:          "SELL",
+		Quantity:      520,
+		Product:       "NRML",
+		OrderType:     "MARKET",
+	})
+	if err == nil {
+		t.Fatal("expected AMO-required entry to fail")
+	}
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "market_closed_amo_required" {
+		t.Fatalf("expected market_closed_amo_required, got %v", err)
+	}
+	if len(manager.List()) != 0 {
+		t.Fatalf("expected rejected entry to avoid local trade creation, got %+v", manager.List())
+	}
+}
+
+func TestAddProtectionMapsAMORequiredBrokerError(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.placeErr = errors.New(`kite POST /orders/regular failed: status=400 body={"status":"error","message":"Your order could not be converted to a After Market Order (AMO).","data":{"hints":["switch_to_amo"]},"error_type":"InputException"}`)
+	if _, err := manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89}); err == nil {
+		t.Fatal("expected AMO-required stop-loss to fail")
+	} else {
+		var domainErr *DomainError
+		if !errors.As(err, &domainErr) || domainErr.Code != "market_closed_amo_required" {
+			t.Fatalf("expected market_closed_amo_required for stop-loss, got %v", err)
+		}
+	}
+	if _, err := manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120}); err == nil {
+		t.Fatal("expected AMO-required target to fail")
+	} else {
+		var domainErr *DomainError
+		if !errors.As(err, &domainErr) || domainErr.Code != "market_closed_amo_required" {
+			t.Fatalf("expected market_closed_amo_required for target, got %v", err)
+		}
+	}
+}
+
 func TestExitKeepsClosedTradeAndProtectionDetailsWhenCancelFails(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
