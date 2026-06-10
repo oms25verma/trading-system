@@ -21,6 +21,8 @@ type fakeBroker struct {
 	cancelCount int
 	ltp         float64
 	placeErr    error
+	cancelErr   error
+	operations  []string
 }
 
 func newFakeBroker() *fakeBroker {
@@ -34,6 +36,7 @@ func newFakeBroker() *fakeBroker {
 func (f *fakeBroker) PlaceOrder(_ context.Context, order Order) (string, error) {
 	f.nextID++
 	f.placeCount++
+	f.operations = append(f.operations, "place:"+order.OrderType)
 	if f.placeErr != nil {
 		return "", f.placeErr
 	}
@@ -71,6 +74,10 @@ func (f *fakeBroker) ModifyOrder(_ context.Context, _ string, orderID string, fi
 
 func (f *fakeBroker) CancelOrder(_ context.Context, _ string, orderID string) error {
 	f.cancelCount++
+	f.operations = append(f.operations, "cancel:"+orderID)
+	if f.cancelErr != nil {
+		return f.cancelErr
+	}
 	delete(f.orders, orderID)
 	delete(f.status, orderID)
 	return nil
@@ -308,6 +315,11 @@ func TestLocalSystemOrdersUseTag(t *testing.T) {
 	if broker.orders[trade.ExitOrderID].Tag != LocalSystemOrderTag {
 		t.Fatalf("expected exit order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.ExitOrderID].Tag)
 	}
+	wantOperations := []string{"place:MARKET", "cancel:order-2", "cancel:order-3"}
+	gotOperations := broker.operations[len(broker.operations)-3:]
+	if fmt.Sprint(gotOperations) != fmt.Sprint(wantOperations) {
+		t.Fatalf("expected exit before protection cancel, got operations %+v", broker.operations)
+	}
 }
 
 func TestExitMapsAMORequiredBrokerErrorAndKeepsTradeOpen(t *testing.T) {
@@ -322,6 +334,10 @@ func TestExitMapsAMORequiredBrokerErrorAndKeepsTradeOpen(t *testing.T) {
 		Product:       "NRML",
 		OrderType:     "MARKET",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 210, LimitPrice: 211})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,6 +358,49 @@ func TestExitMapsAMORequiredBrokerErrorAndKeepsTradeOpen(t *testing.T) {
 	}
 	if current.TradeStatus != TradeStatusOpen || current.ExitOrderID != "" {
 		t.Fatalf("expected trade to remain open without exit order, got %+v", current)
+	}
+	if broker.cancelCount != 0 || current.StopLoss == nil || current.StopOrderStatus != OrderStatusOpen {
+		t.Fatalf("expected protection to remain active after rejected exit, trade=%+v cancels=%d", current, broker.cancelCount)
+	}
+}
+
+func TestExitKeepsClosedTradeAndProtectionDetailsWhenCancelFails(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.cancelErr = errors.New("cancel rejected")
+	trade, err = manager.Exit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TradeStatus != TradeStatusClosed || trade.ExitOrderID == "" {
+		t.Fatalf("expected accepted exit to close trade, got %+v", trade)
+	}
+	if trade.StopLoss == nil || trade.Target == nil || trade.StopOrderStatus != OrderStatusOpen || trade.TargetOrderStatus != OrderStatusOpen {
+		t.Fatalf("expected failed protection cancels to remain visible, got %+v", trade)
+	}
+	if broker.cancelCount != 2 {
+		t.Fatalf("expected both protection cancels attempted, got %d", broker.cancelCount)
 	}
 }
 

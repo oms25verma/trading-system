@@ -581,17 +581,6 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 		trade.EntryStatus = OrderStatusComplete
 	}
 
-	if trade.StopOrderID != "" {
-		if err := m.broker.CancelOrder(ctx, "regular", trade.StopOrderID); err != nil {
-			return nil, err
-		}
-	}
-	if trade.TargetOrderID != "" {
-		if err := m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID); err != nil {
-			return nil, err
-		}
-	}
-
 	exitOrderID, err := m.broker.PlaceOrder(ctx, Order{
 		Exchange:         trade.Exchange,
 		TradingSymbol:    trade.TradingSymbol,
@@ -614,6 +603,33 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 		return nil, err
 	}
 
+	stopCancelled := false
+	if trade.StopOrderID != "" && !isTerminalOrderStatus(trade.StopOrderStatus) {
+		if err := m.broker.CancelOrder(ctx, "regular", trade.StopOrderID); err != nil {
+			m.logger.WarnContext(ctx, "manual_exit_stop_loss_cancel_failed",
+				"request_id", observability.RequestID(ctx),
+				"trade_id", trade.ID,
+				"order_id", trade.StopOrderID,
+				"error", err,
+			)
+		} else {
+			stopCancelled = true
+		}
+	}
+	targetCancelled := false
+	if trade.TargetOrderID != "" && !isTerminalOrderStatus(trade.TargetOrderStatus) {
+		if err := m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID); err != nil {
+			m.logger.WarnContext(ctx, "manual_exit_target_cancel_failed",
+				"request_id", observability.RequestID(ctx),
+				"trade_id", trade.ID,
+				"order_id", trade.TargetOrderID,
+				"error", err,
+			)
+		} else {
+			targetCancelled = true
+		}
+	}
+
 	m.mu.Lock()
 	current := m.trades[id]
 	current.ExitOrderID = exitOrderID
@@ -621,14 +637,14 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	current.ExitReason = ExitReasonManual
 	now := time.Now().UTC()
 	current.ClosedAt = &now
-	if current.StopOrderID != "" {
+	if stopCancelled {
 		current.StopOrderStatus = OrderStatusCancelled
+		current.StopLoss = nil
 	}
-	if current.TargetOrderID != "" {
+	if targetCancelled {
 		current.TargetOrderStatus = OrderStatusCancelled
+		current.Target = nil
 	}
-	current.StopLoss = nil
-	current.Target = nil
 	current.PendingProtection = nil
 	current.PendingStopLoss = nil
 	current.PendingTarget = nil
