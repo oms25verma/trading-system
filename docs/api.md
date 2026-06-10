@@ -26,6 +26,8 @@ CLOSED
 BROKER
 ```
 
+Kite API failures are normalized into `BROKER` errors. The `code` is derived from Kite's `error_type`, for example `kite_token`, `kite_permission`, or `kite_input`, and `message` contains Kite's user-facing rejection reason.
+
 ## Health
 
 ```http
@@ -41,7 +43,9 @@ GET /openapi.json
 
 `/metadata` returns frontend bootstrap data: safe runtime defaults, enums, endpoint list, and feature capabilities. Sensitive values such as Kite secrets and access tokens are never returned. If `SYMBOL_WATCHLIST_FILE` or `SYMBOL_WATCHLIST` is configured, metadata includes `runtime.symbol_watchlist` for the frontend order-entry dropdown. The file-based watchlist is recommended because it supports display names, symbol-level default quantity, lot size, tick size, multiple products, and disabled/expired symbols.
 
-`/openapi.json` returns a starter OpenAPI 3 path map for frontend tooling and API discovery.
+When `ENFORCE_SYMBOL_WATCHLIST=true`, direct `POST /trades` requests are also restricted to the configured watchlist. When `REQUIRE_ORDER_PROTECTION=true`, `POST /trades` must include a `protection` block with both stop-loss and target points.
+
+`/openapi.json` returns a starter OpenAPI 3 contract with path operations, request bodies, common responses, and component schemas for the core trading/dashboard flows.
 
 ## Dashboard
 

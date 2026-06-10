@@ -86,4 +86,6 @@ export const api = {
   cancelOrder: (orderID: string) => post<unknown>(`/orders/${encodeURIComponent(orderID)}/cancel`),
   linkExternalExit: (groupID: string, orderID: string, role: string) =>
     post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/external-exit/link`, { order_id: orderID, role }),
+  unlinkExternalExit: (groupID: string, role: string, orderID?: string) =>
+    del<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/external-exit/link`, { order_id: orderID, role }),
 };

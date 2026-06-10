@@ -26,6 +26,8 @@ type Config struct {
 	DefaultStopLossPoints   float64
 	DefaultTargetPoints     float64
 	DefaultSLLimitOffset    float64
+	EnforceSymbolWatchlist  bool
+	RequireOrderProtection  bool
 	LogLevel                string
 }
 
@@ -87,6 +89,8 @@ func Load() Config {
 		DefaultStopLossPoints:   floatEnv("DEFAULT_STOP_LOSS_POINTS", 0),
 		DefaultTargetPoints:     floatEnv("DEFAULT_TARGET_POINTS", 0),
 		DefaultSLLimitOffset:    floatEnv("DEFAULT_SL_LIMIT_OFFSET", 0),
+		EnforceSymbolWatchlist:  boolEnv("ENFORCE_SYMBOL_WATCHLIST", true),
+		RequireOrderProtection:  boolEnv("REQUIRE_ORDER_PROTECTION", false),
 		LogLevel:                stringEnv("LOG_LEVEL", "info"),
 	}
 }
@@ -220,6 +224,18 @@ func stringEnv(key, fallback string) string {
 		return fallback
 	}
 	return raw
+}
+
+func boolEnv(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func (c Config) Validate(broker string) error {

@@ -139,6 +139,8 @@ export interface Metadata {
     default_stop_loss_points: number;
     default_target_points: number;
     default_sl_limit_offset: number;
+    enforce_symbol_watchlist: boolean;
+    require_order_protection: boolean;
     symbol_watchlist?: Array<{
       exchange: string;
       tradingsymbol: string;

@@ -8,7 +8,7 @@ import {
   CircleDollarSign,
   Clock3,
   Crosshair,
-  ExternalLink,
+  Info,
   LayoutDashboard,
   Link2,
   ListChecks,
@@ -19,6 +19,7 @@ import {
   Shield,
   Target,
   Trash2,
+  Unlink2,
   XCircle,
 } from 'lucide-react';
 import { ApiError, api } from './api';
@@ -44,7 +45,8 @@ type Action =
   | { type: 'stop-loss'; trade?: ManagedTrade; group?: PositionGroup }
   | { type: 'target'; trade?: ManagedTrade; group?: PositionGroup }
   | { type: 'take-over'; group: PositionGroup }
-  | { type: 'link-exit'; group: PositionGroup };
+  | { type: 'link-exit'; group: PositionGroup }
+  | { type: 'group-detail'; group: PositionGroup };
 
 interface Snapshot {
   metadata?: Metadata;
@@ -208,8 +210,11 @@ export function App() {
                 onAMOExit={(group) => confirmRun(`Queue AMO exit for ${group.tradingsymbol}?`, 'Queued AMO exit', () => api.queueAMOExitGroup(group.id))}
                 onRemoveStopLoss={(group) => confirmRun(`Remove stop-loss for ${group.tradingsymbol}?`, 'Removed group stop-loss', () => api.removeGroupStopLoss(group.id))}
                 onRemoveTarget={(group) => confirmRun(`Remove target for ${group.tradingsymbol}?`, 'Removed group target', () => api.removeGroupTarget(group.id))}
+                onUnlinkStopLoss={(group) => confirmRun(`Unlink stop-loss locally for ${group.tradingsymbol}? This will not cancel the broker order.`, 'Unlinked group stop-loss', () => api.unlinkExternalExit(group.id, 'stop_loss', group.trade_ids.length === 1 ? linkedTrade(snapshot.trades, group)?.stop_order_id : undefined))}
+                onUnlinkTarget={(group) => confirmRun(`Unlink target locally for ${group.tradingsymbol}? This will not cancel the broker order.`, 'Unlinked group target', () => api.unlinkExternalExit(group.id, 'target', group.trade_ids.length === 1 ? linkedTrade(snapshot.trades, group)?.target_order_id : undefined))}
                 onApplyConversion={(group) => confirmRun(`Apply product conversion for ${group.tradingsymbol}?`, 'Applied product conversion', () => api.applyProductConversion(group.trade_ids[0]))}
                 onTakeOver={(group) => setAction({ type: 'take-over', group })}
+                onDetails={(group) => setAction({ type: 'group-detail', group })}
               />
             )}
             {view === 'orders' && (
@@ -233,6 +238,7 @@ export function App() {
                 orders={snapshot.orders}
                 onLink={(group) => setAction({ type: 'link-exit', group })}
                 onTakeOver={(group) => setAction({ type: 'take-over', group })}
+                onDetails={(group) => setAction({ type: 'group-detail', group })}
               />
             )}
           </>
@@ -244,6 +250,7 @@ export function App() {
           action={action}
           metadata={snapshot.metadata}
           orders={snapshot.orders}
+          trades={snapshot.trades}
           onClose={() => setAction(null)}
           onRun={run}
         />
@@ -308,8 +315,11 @@ function GroupsView(props: {
   onAMOExit: (group: PositionGroup) => void;
   onRemoveStopLoss: (group: PositionGroup) => void;
   onRemoveTarget: (group: PositionGroup) => void;
+  onUnlinkStopLoss: (group: PositionGroup) => void;
+  onUnlinkTarget: (group: PositionGroup) => void;
   onApplyConversion: (group: PositionGroup) => void;
   onTakeOver: (group: PositionGroup) => void;
+  onDetails: (group: PositionGroup) => void;
 }) {
   const [table, setTable] = useState<TableState>({ page: 1, pageSize: 25, status: '', symbol: '' });
   const groups = useMemo(() => props.groups.filter((group) => matchesTableFilter(group, table)), [props.groups, table]);
@@ -467,6 +477,7 @@ function ConflictsView(props: {
   orders: KiteOrder[];
   onLink: (group: PositionGroup) => void;
   onTakeOver: (group: PositionGroup) => void;
+  onDetails: (group: PositionGroup) => void;
 }) {
   return (
     <section className="table-section">
@@ -478,6 +489,7 @@ function ConflictsView(props: {
           onTarget: props.onLink,
           onExit: props.onLink,
           onTakeOver: props.onTakeOver,
+          onDetails: props.onDetails,
         }}
         conflictMode
       />
@@ -497,8 +509,11 @@ function GroupTable(props: {
     onAMOExit?: (group: PositionGroup) => void;
     onRemoveStopLoss?: (group: PositionGroup) => void;
     onRemoveTarget?: (group: PositionGroup) => void;
+    onUnlinkStopLoss?: (group: PositionGroup) => void;
+    onUnlinkTarget?: (group: PositionGroup) => void;
     onApplyConversion?: (group: PositionGroup) => void;
     onTakeOver: (group: PositionGroup) => void;
+    onDetails?: (group: PositionGroup) => void;
   };
 }) {
   return (
@@ -535,6 +550,7 @@ function GroupTable(props: {
               {!props.compact && <td><WarningChips warnings={group.warnings ?? []} /></td>}
               {!props.compact && (
                 <td className="row-actions">
+                  <button className="icon-button" onClick={() => props.actions?.onDetails?.(group)} title="Details" aria-label="Details"><Info /></button>
                   {group.management_status === 'UNMANAGED' ? (
                     <button className="icon-button" onClick={() => props.actions?.onTakeOver(group)} title="Take over" aria-label="Take over"><ArrowDownToLine /></button>
                   ) : props.conflictMode ? (
@@ -546,8 +562,10 @@ function GroupTable(props: {
                       )}
                       <button className="icon-button" onClick={() => props.actions?.onStopLoss(group)} title="Set stop-loss" aria-label="Set stop-loss"><Shield /></button>
                       {(group.stop_loss_count ?? 0) > 0 && <button className="icon-button danger" onClick={() => props.actions?.onRemoveStopLoss?.(group)} title="Remove stop-loss" aria-label="Remove stop-loss"><XCircle /></button>}
+                      {(group.stop_loss_count ?? 0) > 0 && <button className="icon-button" onClick={() => props.actions?.onUnlinkStopLoss?.(group)} title="Unlink stop-loss locally" aria-label="Unlink stop-loss locally"><Unlink2 /></button>}
                       <button className="icon-button" onClick={() => props.actions?.onTarget(group)} title="Set target" aria-label="Set target"><Target /></button>
                       {(group.target_count ?? 0) > 0 && <button className="icon-button danger" onClick={() => props.actions?.onRemoveTarget?.(group)} title="Remove target" aria-label="Remove target"><XCircle /></button>}
+                      {(group.target_count ?? 0) > 0 && <button className="icon-button" onClick={() => props.actions?.onUnlinkTarget?.(group)} title="Unlink target locally" aria-label="Unlink target locally"><Unlink2 /></button>}
                       {!group.exit_pending && <button className="icon-button" onClick={() => props.actions?.onAMOExit?.(group)} title="Queue AMO exit" aria-label="Queue AMO exit"><Clock3 /></button>}
                       <button className="icon-button danger" onClick={() => props.actions?.onExit(group)} title="Exit group" aria-label="Exit group"><LogOut /></button>
                     </>
@@ -566,6 +584,7 @@ function ActionPanel(props: {
   action: Action;
   metadata?: Metadata;
   orders: KiteOrder[];
+  trades: ManagedTrade[];
   onClose: () => void;
   onRun: (label: string, fn: () => Promise<unknown>) => Promise<void>;
 }) {
@@ -574,7 +593,8 @@ function ActionPanel(props: {
     props.action.type === 'stop-loss' ? 'Set Stop-Loss' :
     props.action.type === 'target' ? 'Set Target' :
     props.action.type === 'take-over' ? 'Take Over Position' :
-    'Link External Exit';
+    props.action.type === 'link-exit' ? 'Link External Exit' :
+    'Position Details';
 
   return (
     <div className="drawer-backdrop" role="presentation">
@@ -588,7 +608,69 @@ function ActionPanel(props: {
         {props.action.type === 'target' && <TargetForm action={props.action} onRun={props.onRun} />}
         {props.action.type === 'take-over' && <TakeOverForm group={props.action.group} onRun={props.onRun} />}
         {props.action.type === 'link-exit' && <LinkExitForm group={props.action.group} orders={props.orders} onRun={props.onRun} />}
+        {props.action.type === 'group-detail' && <GroupDetail group={props.action.group} trades={props.trades} orders={props.orders} />}
       </aside>
+    </div>
+  );
+}
+
+function GroupDetail(props: { group: PositionGroup; trades: ManagedTrade[]; orders: KiteOrder[] }) {
+  const childTrades = props.trades.filter((trade) => props.group.trade_ids.includes(trade.id));
+  const linkedOrderIDs = new Set(childTrades.flatMap((trade) => [trade.entry_order_id, trade.stop_order_id, trade.target_order_id, trade.exit_order_id].filter(Boolean) as string[]));
+  const linkedOrders = props.orders.filter((order) => linkedOrderIDs.has(order.order_id));
+
+  return (
+    <div className="detail-stack">
+      <div className="selected-box">
+        <strong>{props.group.exchange}:{props.group.tradingsymbol}</strong>
+        <span>{props.group.product} · {props.group.side || '-'} · qty {props.group.quantity}</span>
+      </div>
+      <DetailGrid rows={[
+        ['Management', props.group.management_status],
+        ['Source', props.group.creation_source],
+        ['Local/Broker', `${props.group.local_quantity ?? 0}/${props.group.broker_quantity ?? 0}`],
+        ['Average Entry', money(props.group.average_entry_price)],
+        ['SL', groupProtectionLabel(props.group, 'stop-loss')],
+        ['Target', groupProtectionLabel(props.group, 'target')],
+        ['Exit Pending', props.group.exit_pending ? props.group.exit_order_id || 'yes' : 'no'],
+      ]} />
+      <section>
+        <h4>Warnings</h4>
+        <WarningChips warnings={props.group.warnings ?? []} />
+      </section>
+      <section>
+        <h4>Child Trades</h4>
+        {childTrades.length ? childTrades.map((trade) => (
+          <div className="detail-row" key={trade.id}>
+            <span className="mono">{trade.id}</span>
+            <small>{trade.side} {trade.quantity} · entry {trade.entry_order_id}</small>
+            <small>SL {dash(trade.stop_order_id ?? '')} · Target {dash(trade.target_order_id ?? '')} · Exit {dash(trade.exit_order_id ?? '')}</small>
+          </div>
+        )) : <p className="muted">No local child trade linked</p>}
+      </section>
+      <section>
+        <h4>Linked Orders</h4>
+        {linkedOrders.length ? linkedOrders.map((order) => (
+          <div className="detail-row" key={order.order_id}>
+            <span className="mono">{order.order_id}</span>
+            <small>{order.transaction_type} {order.order_type} · {order.status} · {formatOrderTime(order)}</small>
+            <small>price {money(order.price)} · trigger {money(order.trigger_price)} · avg {money(order.average_price)}</small>
+          </div>
+        )) : <p className="muted">No synced linked order snapshot</p>}
+      </section>
+    </div>
+  );
+}
+
+function DetailGrid(props: { rows: Array<[string, React.ReactNode]> }) {
+  return (
+    <div className="detail-grid">
+      {props.rows.map(([label, value]) => (
+        <div key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
     </div>
   );
 }
@@ -969,6 +1051,10 @@ function latestSyncedAt(orders: KiteOrder[], positions: KitePosition[]) {
   ].filter(Boolean);
   values.sort((left, right) => Date.parse(right) - Date.parse(left));
   return values[0] ?? '';
+}
+
+function linkedTrade(trades: ManagedTrade[], group: PositionGroup) {
+  return trades.find((trade) => group.trade_ids.includes(trade.id));
 }
 
 function matchesTableFilter(item: KiteOrder | ManagedTrade | PositionGroup, state: TableState) {

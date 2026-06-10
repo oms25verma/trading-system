@@ -28,6 +28,27 @@ type Client struct {
 	logger      *slog.Logger
 }
 
+type APIError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Status     string
+	Message    string
+	ErrorType  string
+	RawBody    string
+}
+
+func (e *APIError) Error() string {
+	if e == nil {
+		return ""
+	}
+	message := e.Message
+	if message == "" {
+		message = e.RawBody
+	}
+	return fmt.Sprintf("kite %s %s failed: status=%d error_type=%s message=%s", e.Method, e.Path, e.StatusCode, valueOr(e.ErrorType, "UNKNOWN"), message)
+}
+
 func NewClient(apiKey, apiSecret, accessToken string) *Client {
 	return &Client{
 		apiKey:      apiKey,
@@ -286,7 +307,7 @@ func (c *Client) doPublic(ctx context.Context, method, path string, body io.Read
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, true)
-		return fmt.Errorf("kite %s %s failed: status=%d body=%s", method, path, resp.StatusCode, bytes.TrimSpace(payload))
+		return kiteAPIError(method, path, resp.StatusCode, payload)
 	}
 	c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, false)
 	if out == nil || len(payload) == 0 {
@@ -330,7 +351,7 @@ func (c *Client) doAuthenticated(ctx context.Context, method, path string, body 
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, true)
-		return fmt.Errorf("kite %s %s failed: status=%d body=%s", method, path, resp.StatusCode, bytes.TrimSpace(payload))
+		return kiteAPIError(method, path, resp.StatusCode, payload)
 	}
 	c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, false)
 	if out == nil || len(payload) == 0 {
@@ -421,6 +442,28 @@ func safeResponseBody(payload []byte) string {
 		return body[:limit] + "...[truncated]"
 	}
 	return body
+}
+
+func kiteAPIError(method, path string, statusCode int, payload []byte) error {
+	body := string(bytes.TrimSpace(payload))
+	var parsed struct {
+		Status    string          `json:"status"`
+		Message   string          `json:"message"`
+		ErrorType string          `json:"error_type"`
+		Data      json.RawMessage `json:"data"`
+	}
+	if len(payload) > 0 {
+		_ = json.Unmarshal(payload, &parsed)
+	}
+	return &APIError{
+		Method:     method,
+		Path:       path,
+		StatusCode: statusCode,
+		Status:     parsed.Status,
+		Message:    parsed.Message,
+		ErrorType:  parsed.ErrorType,
+		RawBody:    body,
+	}
 }
 
 func setFloat(form url.Values, key string, value float64) {

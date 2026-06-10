@@ -692,6 +692,46 @@ tr:last-child td {
   color: #687782;
 }
 
+.detail-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.detail-stack h4 {
+  margin: 0 0 8px;
+  color: #4a5964;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.detail-grid div,
+.detail-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f5f8fa;
+}
+
+.detail-grid span,
+.detail-row small {
+  color: #687782;
+  font-size: 12px;
+}
+
+.detail-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 .spin {
   animation: spin 0.8s linear infinite;
 }

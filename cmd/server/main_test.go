@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -172,6 +173,64 @@ func TestOpenAPISpecIncludesAllMetadataEndpoints(t *testing.T) {
 		if paths[endpoint] == nil {
 			t.Fatalf("expected openapi spec to include %s", endpoint)
 		}
+	}
+}
+
+func TestCreateTradeRejectsSymbolOutsideWatchlist(t *testing.T) {
+	manager := trading.NewManager(trading.NewPaperBroker())
+	cfg := config.Config{
+		DefaultProduct:         "MIS",
+		DefaultQuantity:        1,
+		EnforceSymbolWatchlist: true,
+		SymbolWatchlist: []config.SymbolWatchItem{
+			{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS"},
+		},
+	}
+	handler := routes(manager, kite.NewClient("", "", ""), cfg)
+
+	body := []byte(`{"exchange":"NSE","tradingsymbol":"RELIANCE","side":"BUY","quantity":1,"product":"MIS","order_type":"MARKET"}`)
+	req := httptest.NewRequest(http.MethodPost, "/trades", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response apiError
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "symbol_not_allowed" {
+		t.Fatalf("unexpected error: %+v", response)
+	}
+}
+
+func TestCreateTradeRequiresConfiguredProtection(t *testing.T) {
+	manager := trading.NewManager(trading.NewPaperBroker())
+	cfg := config.Config{
+		DefaultProduct:         "MIS",
+		DefaultQuantity:        1,
+		RequireOrderProtection: true,
+		DefaultStopLossPoints:  10,
+		DefaultTargetPoints:    20,
+		DefaultSLLimitOffset:   1,
+	}
+	handler := routes(manager, kite.NewClient("", "", ""), cfg)
+
+	body := []byte(`{"exchange":"NSE","tradingsymbol":"INFY","side":"BUY","quantity":1,"product":"MIS","order_type":"MARKET"}`)
+	req := httptest.NewRequest(http.MethodPost, "/trades", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response apiError
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "protection_required" {
+		t.Fatalf("unexpected error: %+v", response)
 	}
 }
 

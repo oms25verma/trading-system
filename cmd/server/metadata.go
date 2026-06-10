@@ -27,6 +27,8 @@ type runtimeMetadata struct {
 	DefaultStopLossPoints   float64          `json:"default_stop_loss_points"`
 	DefaultTargetPoints     float64          `json:"default_target_points"`
 	DefaultSLLimitOffset    float64          `json:"default_sl_limit_offset"`
+	EnforceSymbolWatchlist  bool             `json:"enforce_symbol_watchlist"`
+	RequireOrderProtection  bool             `json:"require_order_protection"`
 	SymbolWatchlist         []symbolMetadata `json:"symbol_watchlist,omitempty"`
 	KiteAPIKeyConfigured    bool             `json:"kite_api_key_configured"`
 	KiteAccessConfigured    bool             `json:"kite_access_configured"`
@@ -90,6 +92,8 @@ func buildMetadata(cfg config.Config) metadataResponse {
 			DefaultStopLossPoints:   cfg.DefaultStopLossPoints,
 			DefaultTargetPoints:     cfg.DefaultTargetPoints,
 			DefaultSLLimitOffset:    cfg.DefaultSLLimitOffset,
+			EnforceSymbolWatchlist:  cfg.EnforceSymbolWatchlist,
+			RequireOrderProtection:  cfg.RequireOrderProtection,
 			SymbolWatchlist:         symbolWatchlistMetadata(cfg.SymbolWatchlist),
 			KiteAPIKeyConfigured:    cfg.KiteAPIKey != "",
 			KiteAccessConfigured:    cfg.AccessToken != "",
@@ -152,8 +156,8 @@ func buildMetadata(cfg config.Config) metadataResponse {
 			ExternalPositionTakeover:  true,
 			ExternalExitManualLinking: true,
 			PollingOCO:                true,
-			DatabasePersistence:       false,
 			KillSwitch:                false,
+			DatabasePersistence:       false,
 			Analytics:                 false,
 		},
 		Endpoints: endpointMap(),

@@ -220,6 +220,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			return
 		}
 		applyCreateDefaults(&req, cfg)
+		if err := validateCreateTradeConfig(req, cfg); err != nil {
+			writeError(r.Context(), w, err)
+			return
+		}
 		trade, err := manager.Enter(r.Context(), req)
 		writeResult(r.Context(), w, trade, err)
 	})
@@ -358,6 +362,37 @@ func applyCreateDefaults(req *trading.CreateTradeRequest, cfg config.Config) {
 	}
 }
 
+func validateCreateTradeConfig(req trading.CreateTradeRequest, cfg config.Config) error {
+	if cfg.EnforceSymbolWatchlist && len(cfg.SymbolWatchlist) > 0 && !watchlistAllows(req, cfg.SymbolWatchlist) {
+		return &trading.DomainError{
+			Kind:    trading.ErrorKindValidation,
+			Code:    "symbol_not_allowed",
+			Message: "symbol/product is not in SYMBOL_WATCHLIST; update config/symbols.json or disable ENFORCE_SYMBOL_WATCHLIST for broad testing",
+		}
+	}
+	if cfg.RequireOrderProtection {
+		if req.Protection == nil || req.Protection.StopLossPoints <= 0 || req.Protection.TargetPoints <= 0 {
+			return &trading.DomainError{
+				Kind:    trading.ErrorKindValidation,
+				Code:    "protection_required",
+				Message: "order protection is required; provide a protection block with both stop_loss_points and target_points",
+			}
+		}
+	}
+	return nil
+}
+
+func watchlistAllows(req trading.CreateTradeRequest, items []config.SymbolWatchItem) bool {
+	for _, item := range items {
+		if strings.EqualFold(item.Exchange, req.Exchange) &&
+			strings.EqualFold(item.TradingSymbol, req.TradingSymbol) &&
+			strings.EqualFold(item.Product, req.Product) {
+			return true
+		}
+	}
+	return false
+}
+
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	defer r.Body.Close()
 	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
@@ -419,6 +454,16 @@ func writeError(ctx context.Context, w http.ResponseWriter, err error) {
 		response.Message = domainErr.Message
 		status = statusForDomainError(domainErr.Kind)
 	}
+	var kiteErr *kite.APIError
+	if errors.As(err, &kiteErr) {
+		response.Kind = "BROKER"
+		response.Code = brokerErrorCode(kiteErr)
+		response.Message = kiteErr.Message
+		if response.Message == "" {
+			response.Message = kiteErr.Error()
+		}
+		status = http.StatusBadGateway
+	}
 
 	slog.WarnContext(ctx, "api_error",
 		"request_id", observability.RequestID(ctx),
@@ -428,6 +473,19 @@ func writeError(ctx context.Context, w http.ResponseWriter, err error) {
 		"message", response.Message,
 	)
 	writeJSON(w, status, response)
+}
+
+func brokerErrorCode(err *kite.APIError) string {
+	if err == nil || err.ErrorType == "" {
+		return "broker_error"
+	}
+	code := strings.ToLower(err.ErrorType)
+	code = strings.TrimSuffix(code, "exception")
+	code = strings.ReplaceAll(code, " ", "_")
+	if code == "" {
+		return "broker_error"
+	}
+	return "kite_" + code
 }
 
 func statusForDomainError(kind trading.ErrorKind) int {
