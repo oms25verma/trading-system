@@ -82,7 +82,11 @@ export interface KiteOrder {
   pending_quantity?: number;
   product: string;
   order_type: string;
+  variety?: string;
+  validity?: string;
   status: OrderStatus | string;
+  status_message?: string;
+  exchange_order_id?: string;
   price?: number;
   trigger_price?: number;
   average_price?: number;
@@ -197,4 +201,13 @@ export interface ApiErrorBody {
   kind: string;
   code: string;
   message: string;
+}
+
+export interface PaginationMeta {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
 }

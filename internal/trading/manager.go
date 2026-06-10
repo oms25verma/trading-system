@@ -1379,6 +1379,7 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 	m.mu.Unlock()
 	m.reconcileSyncedPositions(ctx, previousPositions, nextPositions, productConversions)
 	m.reconcileExternalExitOrders(ctx, nextOrders, result)
+	m.reconcileQueuedExitOrdersFromSnapshot(ctx, nextOrders)
 	if err := m.persistOrders(); err != nil {
 		return nil, err
 	}
@@ -1705,6 +1706,11 @@ func (m *Manager) trailOnce(ctx context.Context) {
 		if err != nil || isTradeClosed(trade) {
 			continue
 		}
+		m.reconcileQueuedExitOrder(ctx, trade)
+		trade, err = m.get(trade.ID)
+		if err != nil || isTradeClosed(trade) {
+			continue
+		}
 		m.reconcileExitOrders(ctx, trade)
 		trade, err = m.get(trade.ID)
 		if err != nil || isTradeClosed(trade) {
@@ -1791,6 +1797,51 @@ func (m *Manager) reconcileExitOrders(ctx context.Context, trade *ManagedTrade) 
 		_ = m.closeTrade(ctx, trade.ID, ExitReasonTarget, stopStatus, targetStatus)
 	default:
 		_ = m.reconcileOpenExitOrderDetails(ctx, trade.ID, stopDetails, targetDetails)
+	}
+}
+
+func (m *Manager) reconcileQueuedExitOrdersFromSnapshot(ctx context.Context, orders map[string]*KiteOrder) {
+	for _, trade := range m.List() {
+		if isTradeClosed(trade) || trade.ExitOrderID == "" {
+			continue
+		}
+		order := orders[trade.ExitOrderID]
+		if order == nil {
+			continue
+		}
+		m.applyQueuedExitStatus(ctx, trade, order.Status)
+	}
+}
+
+func (m *Manager) reconcileQueuedExitOrder(ctx context.Context, trade *ManagedTrade) {
+	if isTradeClosed(trade) || trade.ExitOrderID == "" {
+		return
+	}
+	details, err := m.broker.OrderDetails(ctx, "regular", trade.ExitOrderID)
+	if err != nil || details == nil {
+		return
+	}
+	m.applyQueuedExitStatus(ctx, trade, details.Status)
+}
+
+func (m *Manager) applyQueuedExitStatus(ctx context.Context, trade *ManagedTrade, status string) {
+	switch {
+	case strings.EqualFold(status, OrderStatusComplete):
+		stopStatus := trade.StopOrderStatus
+		if trade.StopOrderID != "" && !isTerminalOrderStatus(stopStatus) {
+			if err := m.broker.CancelOrder(ctx, "regular", trade.StopOrderID); err == nil {
+				stopStatus = OrderStatusCancelled
+			}
+		}
+		targetStatus := trade.TargetOrderStatus
+		if trade.TargetOrderID != "" && !isTerminalOrderStatus(targetStatus) {
+			if err := m.broker.CancelOrder(ctx, "regular", trade.TargetOrderID); err == nil {
+				targetStatus = OrderStatusCancelled
+			}
+		}
+		_ = m.closeTrade(ctx, trade.ID, ExitReasonManual, stopStatus, targetStatus)
+	case strings.EqualFold(status, OrderStatusCancelled), strings.EqualFold(status, OrderStatusRejected):
+		_ = m.clearQueuedExitOrder(ctx, trade.ID, status)
 	}
 }
 
@@ -2039,6 +2090,9 @@ func (m *Manager) tradeOrderReference(orderID string) (string, string) {
 		if trade.TargetOrderID == orderID {
 			return trade.ID, "target"
 		}
+		if trade.ExitOrderID == orderID {
+			return trade.ID, "exit"
+		}
 	}
 	return "", ""
 }
@@ -2103,6 +2157,35 @@ func (m *Manager) reconcileOpenExitOrderDetails(ctx context.Context, id string, 
 		"stop_order_status", orderStatusFromDetails(stopDetails),
 		"target_order_status", orderStatusFromDetails(targetDetails),
 	)
+	return nil
+}
+
+func (m *Manager) clearQueuedExitOrder(ctx context.Context, id, status string) error {
+	m.mu.Lock()
+	trade, ok := m.trades[id]
+	if !ok {
+		m.mu.Unlock()
+		return notFoundError("trade_not_found", "trade not found")
+	}
+	if isTradeClosed(trade) || trade.ExitOrderID == "" {
+		m.mu.Unlock()
+		return nil
+	}
+	trade.ExitOrderID = ""
+	trade.UpdatedAt = time.Now().UTC()
+	result := cloneTrade(trade)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return err
+	}
+	if m.logger != nil {
+		m.logger.InfoContext(ctx, "queued_exit_order_terminal",
+			"request_id", observability.RequestID(ctx),
+			"trade_id", id,
+			"status", status,
+		)
+	}
+	m.logTradeEvent(ctx, "queued_exit_order_cleared", result)
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,7 +43,9 @@ func (f *fakeBroker) PlaceOrder(_ context.Context, order Order) (string, error) 
 	}
 	id := "order-" + strconv.Itoa(f.nextID)
 	f.orders[id] = order
-	if order.OrderType == "MARKET" {
+	if strings.EqualFold(order.Variety, "amo") {
+		f.status[id] = OrderStatusOpen
+	} else if order.OrderType == "MARKET" {
 		f.status[id] = "COMPLETE"
 	} else {
 		f.status[id] = "OPEN"
@@ -136,6 +139,8 @@ func (f *fakeBroker) Orders(_ context.Context) ([]KiteOrder, error) {
 			Quantity:        order.Quantity,
 			Product:         order.Product,
 			OrderType:       order.OrderType,
+			Variety:         valueOr(order.Variety, "regular"),
+			Validity:        valueOr(order.Validity, "DAY"),
 			Status:          f.status[id],
 			Price:           order.Price,
 			TriggerPrice:    order.TriggerPrice,
@@ -485,6 +490,79 @@ func TestQueueAMOExitKeepsTradeOpenAndProtectionActive(t *testing.T) {
 	var domainErr *DomainError
 	if !errors.As(err, &domainErr) || domainErr.Code != "exit_order_already_exists" {
 		t.Fatalf("expected duplicate AMO exit to fail, got %v", err)
+	}
+}
+
+func TestQueuedAMOExitCompletionClosesTrade(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.QueueAMOExit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+
+	broker.status[trade.ExitOrderID] = OrderStatusComplete
+	manager.trailOnce(context.Background())
+
+	current, err := manager.get(trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.TradeStatus != TradeStatusClosed || current.ExitReason != ExitReasonManual {
+		t.Fatalf("expected completed AMO exit to close trade, got %+v", current)
+	}
+	if current.StopOrderStatus != OrderStatusCancelled {
+		t.Fatalf("expected protection cancelled after AMO completion, got %+v", current)
+	}
+}
+
+func TestQueuedAMOExitRejectedClearsExitOrderAndKeepsTradeOpen(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.QueueAMOExit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.positions = []Position{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS", Quantity: 1}}
+
+	broker.status[trade.ExitOrderID] = OrderStatusRejected
+	manager.trailOnce(context.Background())
+
+	current, err := manager.get(trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.TradeStatus != TradeStatusOpen || current.ExitOrderID != "" {
+		t.Fatalf("expected rejected AMO exit to clear queued exit and keep trade open, got %+v", current)
 	}
 }
 

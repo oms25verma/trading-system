@@ -154,6 +154,13 @@ button:disabled {
   margin-top: auto;
 }
 
+.sync-time {
+  color: #687782;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .icon-text-button {
   display: inline-flex;
   align-items: center;
@@ -426,6 +433,42 @@ tr:last-child td {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.table-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 140px 100px auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.field.compact {
+  gap: 4px;
+}
+
+.field.compact input,
+.field.compact select {
+  min-height: 34px;
+}
+
+.table-total {
+  color: #687782;
+  font-size: 12px;
+  font-weight: 800;
+  padding-bottom: 9px;
+  text-align: right;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  color: #4a5964;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .pill,
@@ -709,8 +752,14 @@ tr:last-child td {
 
   .metric-grid,
   .work-grid,
-  .form-grid.two {
+  .form-grid.two,
+  .table-controls {
     grid-template-columns: 1fr;
+  }
+
+  .table-total {
+    padding-bottom: 0;
+    text-align: left;
   }
 
   .nav-list {

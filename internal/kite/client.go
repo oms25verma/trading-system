@@ -103,7 +103,11 @@ type OrderStatusResponse struct {
 	Quantity                int     `json:"quantity"`
 	Product                 string  `json:"product"`
 	OrderType               string  `json:"order_type"`
+	Variety                 string  `json:"variety"`
+	Validity                string  `json:"validity"`
 	Status                  string  `json:"status"`
+	StatusMessage           string  `json:"status_message"`
+	ExchangeOrderID         string  `json:"exchange_order_id"`
 	Price                   float64 `json:"price"`
 	TriggerPrice            float64 `json:"trigger_price"`
 	AveragePrice            float64 `json:"average_price"`

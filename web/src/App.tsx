@@ -37,6 +37,8 @@ import type {
 
 type View = 'dashboard' | 'groups' | 'orders' | 'trades' | 'conflicts';
 type SelectOption = string | { value: string; label: string };
+type TableState = { page: number; pageSize: number; status: string; symbol: string };
+type PageResult<T> = { items: T[]; page: number; totalPages: number; total: number };
 type Action =
   | { type: 'create-trade' }
   | { type: 'stop-loss'; trade?: ManagedTrade; group?: PositionGroup }
@@ -70,6 +72,7 @@ export function App() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [action, setAction] = useState<Action | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState('');
 
   async function load(options?: { silent?: boolean }) {
     if (!options?.silent) setLoading(true);
@@ -85,6 +88,8 @@ export function App() {
         api.positions(),
       ]);
       setSnapshot({ metadata, dashboard, groups, conflicts, orders, trades, positions });
+      const latestSync = latestSyncedAt(orders, positions);
+      if (latestSync) setLastSyncedAt(latestSync);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -104,6 +109,27 @@ export function App() {
       await fn();
       setNotice(label);
       setAction(null);
+      await load({ silent: true });
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function confirmRun(message: string, label: string, fn: () => Promise<unknown>) {
+    if (!window.confirm(message)) return;
+    void run(label, fn);
+  }
+
+  async function syncKite() {
+    setBusy('Synced Kite snapshots');
+    setError('');
+    setNotice('');
+    try {
+      const result = await api.sync();
+      if (isSyncResult(result) && result.synced_at) setLastSyncedAt(result.synced_at);
+      setNotice('Synced Kite snapshots');
       await load({ silent: true });
     } catch (err) {
       setError(errorMessage(err));
@@ -133,10 +159,11 @@ export function App() {
           <NavButton icon={<AlertTriangle />} label="Conflicts" active={view === 'conflicts'} onClick={() => setView('conflicts')} count={snapshot.conflicts.length} />
         </nav>
         <div className="sidebar-footer">
-          <button className="icon-text-button" onClick={() => void run('Synced Kite snapshots', api.sync)} disabled={!!busy}>
+          <button className="icon-text-button" onClick={() => void syncKite()} disabled={!!busy}>
             {busy === 'Synced Kite snapshots' ? <Loader2 className="spin" /> : <RefreshCw />}
             Sync Kite
           </button>
+          <span className="sync-time">{lastSyncedAt ? `Last ${formatDateTime(lastSyncedAt)}` : 'Not synced'}</span>
           <button className="icon-text-button primary" onClick={() => setAction({ type: 'create-trade' })}>
             <Plus />
             New Trade
@@ -177,26 +204,27 @@ export function App() {
                 groups={snapshot.groups}
                 onStopLoss={(group) => setAction({ type: 'stop-loss', group })}
                 onTarget={(group) => setAction({ type: 'target', group })}
-                onExit={(group) => void run('Exited group', () => api.exitGroup(group.id))}
-                onAMOExit={(group) => void run('Queued AMO exit', () => api.queueAMOExitGroup(group.id))}
-                onRemoveStopLoss={(group) => void run('Removed group stop-loss', () => api.removeGroupStopLoss(group.id))}
-                onRemoveTarget={(group) => void run('Removed group target', () => api.removeGroupTarget(group.id))}
+                onExit={(group) => confirmRun(`Exit ${group.tradingsymbol} now?`, 'Exited group', () => api.exitGroup(group.id))}
+                onAMOExit={(group) => confirmRun(`Queue AMO exit for ${group.tradingsymbol}?`, 'Queued AMO exit', () => api.queueAMOExitGroup(group.id))}
+                onRemoveStopLoss={(group) => confirmRun(`Remove stop-loss for ${group.tradingsymbol}?`, 'Removed group stop-loss', () => api.removeGroupStopLoss(group.id))}
+                onRemoveTarget={(group) => confirmRun(`Remove target for ${group.tradingsymbol}?`, 'Removed group target', () => api.removeGroupTarget(group.id))}
+                onApplyConversion={(group) => confirmRun(`Apply product conversion for ${group.tradingsymbol}?`, 'Applied product conversion', () => api.applyProductConversion(group.trade_ids[0]))}
                 onTakeOver={(group) => setAction({ type: 'take-over', group })}
               />
             )}
             {view === 'orders' && (
-              <OrdersView orders={snapshot.orders} onCancel={(order) => void run('Cancelled order', () => api.cancelOrder(order.order_id))} />
+              <OrdersView orders={snapshot.orders} onCancel={(order) => confirmRun(`Cancel order ${order.order_id}?`, 'Cancelled order', () => api.cancelOrder(order.order_id))} />
             )}
             {view === 'trades' && (
               <TradesView
                 trades={snapshot.trades}
                 onStopLoss={(trade) => setAction({ type: 'stop-loss', trade })}
                 onTarget={(trade) => setAction({ type: 'target', trade })}
-                onExit={(trade) => void run('Exited trade', () => api.exitTrade(trade.id))}
-                onAMOExit={(trade) => void run('Queued AMO exit', () => api.queueAMOExitTrade(trade.id))}
-                onRemoveStopLoss={(trade) => void run('Removed stop-loss', () => api.removeStopLoss(trade.id))}
-                onRemoveTarget={(trade) => void run('Removed target', () => api.removeTarget(trade.id))}
-                onCancelEntry={(trade) => void run('Cancelled entry', () => api.cancelEntry(trade.id))}
+                onExit={(trade) => confirmRun(`Exit ${trade.tradingsymbol} now?`, 'Exited trade', () => api.exitTrade(trade.id))}
+                onAMOExit={(trade) => confirmRun(`Queue AMO exit for ${trade.tradingsymbol}?`, 'Queued AMO exit', () => api.queueAMOExitTrade(trade.id))}
+                onRemoveStopLoss={(trade) => confirmRun(`Remove stop-loss for ${trade.tradingsymbol}?`, 'Removed stop-loss', () => api.removeStopLoss(trade.id))}
+                onRemoveTarget={(trade) => confirmRun(`Remove target for ${trade.tradingsymbol}?`, 'Removed target', () => api.removeTarget(trade.id))}
+                onCancelEntry={(trade) => confirmRun(`Cancel entry for ${trade.tradingsymbol}?`, 'Cancelled entry', () => api.cancelEntry(trade.id))}
               />
             )}
             {view === 'conflicts' && (
@@ -280,22 +308,34 @@ function GroupsView(props: {
   onAMOExit: (group: PositionGroup) => void;
   onRemoveStopLoss: (group: PositionGroup) => void;
   onRemoveTarget: (group: PositionGroup) => void;
+  onApplyConversion: (group: PositionGroup) => void;
   onTakeOver: (group: PositionGroup) => void;
 }) {
+  const [table, setTable] = useState<TableState>({ page: 1, pageSize: 25, status: '', symbol: '' });
+  const groups = useMemo(() => props.groups.filter((group) => matchesTableFilter(group, table)), [props.groups, table]);
+  const page = pageItems(groups, table);
+
   return (
     <section className="table-section">
       <PanelTitle icon={<Activity />} title="Position Groups" />
-      <GroupTable groups={props.groups} actions={props} />
+      <TableControls state={table} total={groups.length} onChange={setTable} statusOptions={['', 'MANAGED', 'UNMANAGED', 'PARTIALLY_MANAGED', 'CONFLICT']} />
+      <GroupTable groups={page.items} actions={props} />
+      <Pager page={page} state={table} onChange={setTable} />
     </section>
   );
 }
 
 function OrdersView(props: { orders: KiteOrder[]; onCancel: (order: KiteOrder) => void }) {
-  const orders = useMemo(() => [...props.orders].sort((left, right) => orderMillis(right) - orderMillis(left)), [props.orders]);
+  const [table, setTable] = useState<TableState>({ page: 1, pageSize: 25, status: '', symbol: '' });
+  const orders = useMemo(() => [...props.orders]
+    .filter((order) => matchesTableFilter(order, table))
+    .sort((left, right) => orderMillis(right) - orderMillis(left)), [props.orders, table]);
+  const page = pageItems(orders, table);
 
   return (
     <section className="table-section">
       <PanelTitle icon={<ListChecks />} title="Orderbook" />
+      <TableControls state={table} total={orders.length} onChange={setTable} statusOptions={['', 'OPEN', 'COMPLETE', 'CANCELLED', 'REJECTED']} />
       <div className="table-wrap">
         <table>
           <thead>
@@ -306,16 +346,20 @@ function OrdersView(props: { orders: KiteOrder[]; onCancel: (order: KiteOrder) =
               <th>Side</th>
               <th>Qty</th>
               <th>Type</th>
+              <th>Variety</th>
+              <th>Validity</th>
               <th>Trigger</th>
               <th>Order Price</th>
               <th>Avg Price</th>
+              <th>Filled/Pending</th>
               <th>Status</th>
+              <th>Message</th>
               <th>Source</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {orders.map((order) => (
+            {page.items.map((order) => (
               <tr key={order.order_id}>
                 <td>{formatOrderTime(order)}</td>
                 <td className="mono">{order.order_id}</td>
@@ -323,10 +367,14 @@ function OrdersView(props: { orders: KiteOrder[]; onCancel: (order: KiteOrder) =
                 <td><SidePill side={order.transaction_type} /></td>
                 <td>{order.quantity}</td>
                 <td>{order.order_type}</td>
+                <td>{order.variety ?? '-'}</td>
+                <td>{order.validity ?? '-'}</td>
                 <td>{money(order.trigger_price)}</td>
                 <td>{money(order.price)}</td>
                 <td>{money(order.average_price)}</td>
+                <td>{order.filled_quantity ?? 0}/{order.pending_quantity ?? 0}</td>
                 <td><OrderStatusPill status={order.status} /></td>
+                <td className="muted">{dash(order.status_message ?? '')}</td>
                 <td>{order.creation_source}</td>
                 <td className="row-actions">
                   {order.status === 'OPEN' && (
@@ -340,7 +388,8 @@ function OrdersView(props: { orders: KiteOrder[]; onCancel: (order: KiteOrder) =
           </tbody>
         </table>
       </div>
-      {props.orders.length === 0 && <EmptyState label="No synced orders" />}
+      <Pager page={page} state={table} onChange={setTable} />
+      {orders.length === 0 && <EmptyState label="No synced orders" />}
     </section>
   );
 }
@@ -355,9 +404,14 @@ function TradesView(props: {
   onRemoveTarget: (trade: ManagedTrade) => void;
   onCancelEntry: (trade: ManagedTrade) => void;
 }) {
+  const [table, setTable] = useState<TableState>({ page: 1, pageSize: 25, status: '', symbol: '' });
+  const trades = useMemo(() => props.trades.filter((trade) => matchesTableFilter(trade, table)), [props.trades, table]);
+  const page = pageItems(trades, table);
+
   return (
     <section className="table-section">
       <PanelTitle icon={<CircleDollarSign />} title="Managed Trades" />
+      <TableControls state={table} total={trades.length} onChange={setTable} statusOptions={['', 'OPEN', 'CLOSED']} />
       <div className="table-wrap">
         <table>
           <thead>
@@ -374,7 +428,7 @@ function TradesView(props: {
             </tr>
           </thead>
           <tbody>
-            {props.trades.map((trade) => (
+            {page.items.map((trade) => (
               <tr key={trade.id}>
                 <td className="mono">{trade.id}</td>
                 <td>{trade.exchange}:{trade.tradingsymbol}</td>
@@ -383,7 +437,7 @@ function TradesView(props: {
                 <td>{money(trade.entry_price)} <span className="muted">{trade.entry_status}</span></td>
                 <td>{trade.stop_loss ? `${money(trade.stop_loss.trigger_price)} / ${money(trade.stop_loss.limit_price)}` : dash(trade.pending_stop_loss ? 'pending' : '')}</td>
                 <td>{trade.target ? money(trade.target.price) : dash(trade.pending_target ? 'pending' : '')}</td>
-                <td><TradeStatusPill status={trade.trade_status ?? 'OPEN'} /></td>
+                <td><TradeStatusPill status={trade.trade_status ?? 'OPEN'} /> {trade.exit_order_id && <span className="subline">exit {trade.exit_order_id}</span>}</td>
                 <td className="row-actions">
                   {trade.trade_status !== 'CLOSED' && (
                     <>
@@ -402,7 +456,8 @@ function TradesView(props: {
           </tbody>
         </table>
       </div>
-      {props.trades.length === 0 && <EmptyState label="No managed trades" />}
+      <Pager page={page} state={table} onChange={setTable} />
+      {trades.length === 0 && <EmptyState label="No managed trades" />}
     </section>
   );
 }
@@ -442,6 +497,7 @@ function GroupTable(props: {
     onAMOExit?: (group: PositionGroup) => void;
     onRemoveStopLoss?: (group: PositionGroup) => void;
     onRemoveTarget?: (group: PositionGroup) => void;
+    onApplyConversion?: (group: PositionGroup) => void;
     onTakeOver: (group: PositionGroup) => void;
   };
 }) {
@@ -485,6 +541,9 @@ function GroupTable(props: {
                     <button className="icon-button" onClick={() => props.actions?.onStopLoss(group)} title="Link external order" aria-label="Link external order"><Link2 /></button>
                   ) : (
                     <>
+                      {group.converted_to_product && group.trade_ids.length === 1 && (
+                        <button className="icon-button" onClick={() => props.actions?.onApplyConversion?.(group)} title="Apply product conversion" aria-label="Apply product conversion"><RefreshCw /></button>
+                      )}
                       <button className="icon-button" onClick={() => props.actions?.onStopLoss(group)} title="Set stop-loss" aria-label="Set stop-loss"><Shield /></button>
                       {(group.stop_loss_count ?? 0) > 0 && <button className="icon-button danger" onClick={() => props.actions?.onRemoveStopLoss?.(group)} title="Remove stop-loss" aria-label="Remove stop-loss"><XCircle /></button>}
                       <button className="icon-button" onClick={() => props.actions?.onTarget(group)} title="Set target" aria-label="Set target"><Target /></button>
@@ -698,6 +757,45 @@ function FormShell(props: { children: React.ReactNode; onSubmit: () => void | Pr
   );
 }
 
+function TableControls(props: { state: TableState; total: number; statusOptions: string[]; onChange: (state: TableState) => void }) {
+  function update(patch: Partial<TableState>) {
+    props.onChange({ ...props.state, ...patch, page: patch.page ?? 1 });
+  }
+
+  return (
+    <div className="table-controls">
+      <label className="field compact">
+        <span>Symbol</span>
+        <input value={props.state.symbol} onChange={(event) => update({ symbol: event.target.value })} placeholder="Filter" />
+      </label>
+      <label className="field compact">
+        <span>Status</span>
+        <select value={props.state.status} onChange={(event) => update({ status: event.target.value })}>
+          {props.statusOptions.map((status) => <option key={status || 'all'} value={status}>{status || 'ALL'}</option>)}
+        </select>
+      </label>
+      <label className="field compact">
+        <span>Rows</span>
+        <select value={props.state.pageSize} onChange={(event) => update({ pageSize: Number(event.target.value) })}>
+          {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+        </select>
+      </label>
+      <span className="table-total">{props.total} rows</span>
+    </div>
+  );
+}
+
+function Pager<T>(props: { page: PageResult<T>; state: TableState; onChange: (state: TableState) => void }) {
+  if (props.page.totalPages <= 1) return null;
+  return (
+    <div className="pager">
+      <button className="text-button" disabled={props.state.page <= 1} onClick={() => props.onChange({ ...props.state, page: props.state.page - 1 })}>Prev</button>
+      <span>Page {props.page.page} / {props.page.totalPages}</span>
+      <button className="text-button" disabled={props.state.page >= props.page.totalPages} onClick={() => props.onChange({ ...props.state, page: props.state.page + 1 })}>Next</button>
+    </div>
+  );
+}
+
 function Input(props: { label: string; value: string | number; type?: string; onChange: (value: string) => void }) {
   return (
     <label className="field">
@@ -864,6 +962,53 @@ function groupProtectionLabel(group: PositionGroup, type: 'stop-loss' | 'target'
   return `${count} set`;
 }
 
+function latestSyncedAt(orders: KiteOrder[], positions: KitePosition[]) {
+  const values = [
+    ...orders.map((order) => order.synced_at),
+    ...positions.map((position) => position.synced_at),
+  ].filter(Boolean);
+  values.sort((left, right) => Date.parse(right) - Date.parse(left));
+  return values[0] ?? '';
+}
+
+function matchesTableFilter(item: KiteOrder | ManagedTrade | PositionGroup, state: TableState) {
+  const symbol = state.symbol.trim().toUpperCase();
+  if (symbol) {
+    const haystack = [
+      'exchange' in item ? item.exchange : '',
+      'tradingsymbol' in item ? item.tradingsymbol : '',
+      'product' in item ? item.product : '',
+      'id' in item ? item.id : '',
+      'order_id' in item ? item.order_id : '',
+    ].join(':').toUpperCase();
+    if (!haystack.includes(symbol)) return false;
+  }
+  if (!state.status) return true;
+  const status =
+    'status' in item ? item.status :
+    'management_status' in item ? item.management_status :
+    'trade_status' in item ? item.trade_status :
+    '';
+  return String(status).toUpperCase() === state.status.toUpperCase();
+}
+
+function pageItems<T>(items: T[], state: TableState): PageResult<T> {
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
+  const page = Math.min(Math.max(1, state.page), totalPages);
+  const start = (page - 1) * state.pageSize;
+  return {
+    items: items.slice(start, start + state.pageSize),
+    page,
+    totalPages,
+    total,
+  };
+}
+
+function isSyncResult(value: unknown): value is { synced_at: string } {
+  return !!value && typeof value === 'object' && 'synced_at' in value;
+}
+
 function optionalNumber(value: string) {
   return value === '' ? undefined : Number(value);
 }
@@ -877,6 +1022,18 @@ function orderMillis(order: KiteOrder) {
 function formatOrderTime(order: KiteOrder) {
   const value = order.order_timestamp || order.synced_at;
   if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function formatDateTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '-';
   return date.toLocaleString('en-IN', {

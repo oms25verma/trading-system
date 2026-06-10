@@ -65,7 +65,11 @@ type KiteOrder struct {
 	PendingQuantity int       `json:"pending_quantity,omitempty"`
 	Product         string    `json:"product"`
 	OrderType       string    `json:"order_type"`
+	Variety         string    `json:"variety,omitempty"`
+	Validity        string    `json:"validity,omitempty"`
 	Status          string    `json:"status"`
+	StatusMessage   string    `json:"status_message,omitempty"`
+	ExchangeOrderID string    `json:"exchange_order_id,omitempty"`
 	Price           float64   `json:"price,omitempty"`
 	TriggerPrice    float64   `json:"trigger_price,omitempty"`
 	AveragePrice    float64   `json:"average_price,omitempty"`

@@ -73,6 +73,7 @@ export const api = {
   exitTrade: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/exit`),
   queueAMOExitTrade: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/exit/amo`),
   cancelEntry: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/cancel-entry`),
+  applyProductConversion: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/product-conversion/apply`),
   takeOverGroup: (groupID: string, entryPrice?: number) =>
     post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/take-over`, entryPrice ? { entry_price: entryPrice } : undefined),
   addGroupStopLoss: (groupID: string, body: StopLossRequest) =>

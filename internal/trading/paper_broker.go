@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,7 +33,9 @@ func (p *PaperBroker) PlaceOrder(_ context.Context, order Order) (string, error)
 	p.nextID++
 	id := "paper-" + strconv.Itoa(p.nextID)
 	p.orders[id] = order
-	if order.OrderType == "MARKET" {
+	if strings.EqualFold(order.Variety, "amo") {
+		p.status[id] = "OPEN"
+	} else if order.OrderType == "MARKET" {
 		p.status[id] = "COMPLETE"
 	} else {
 		p.status[id] = "OPEN"
@@ -108,6 +111,8 @@ func (p *PaperBroker) Orders(_ context.Context) ([]KiteOrder, error) {
 			Quantity:        order.Quantity,
 			Product:         order.Product,
 			OrderType:       order.OrderType,
+			Variety:         valueOr(order.Variety, "regular"),
+			Validity:        valueOr(order.Validity, "DAY"),
 			Status:          p.status[id],
 			Price:           order.Price,
 			TriggerPrice:    order.TriggerPrice,
