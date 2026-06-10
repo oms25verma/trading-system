@@ -104,6 +104,73 @@ func TestDashboardRouteReturnsSummary(t *testing.T) {
 	}
 }
 
+func TestMetadataRouteReturnsRuntimeDefaultsAndEnums(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	cfg := config.Config{
+		Addr:                    ":9090",
+		TradeStorePath:          "data",
+		DefaultProduct:          "MIS",
+		DefaultQuantity:         2,
+		DefaultMarketProtection: intPtr(5),
+		DefaultStopLossPoints:   10,
+		DefaultTargetPoints:     20,
+		DefaultSLLimitOffset:    1,
+		LogLevel:                "debug",
+	}
+	handler := routes(manager, kite.NewClient("", "", ""), cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/metadata", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var metadata metadataResponse
+	if err := json.NewDecoder(rec.Body).Decode(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Runtime.DefaultQuantity != 2 || metadata.Runtime.DefaultMarketProtection == nil || *metadata.Runtime.DefaultMarketProtection != 5 {
+		t.Fatalf("unexpected runtime defaults: %+v", metadata.Runtime)
+	}
+	if len(metadata.Enums.Sides) == 0 || len(metadata.Endpoints["/trades"]) == 0 {
+		t.Fatalf("expected enums and endpoints, got %+v", metadata)
+	}
+}
+
+func TestOpenAPIRouteReturnsPathMap(t *testing.T) {
+	manager := newHTTPTestManager(t)
+	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var spec map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&spec); err != nil {
+		t.Fatal(err)
+	}
+	if spec["openapi"] != "3.0.3" {
+		t.Fatalf("unexpected openapi version: %+v", spec["openapi"])
+	}
+	paths, ok := spec["paths"].(map[string]any)
+	if !ok || paths["/trades"] == nil || paths["/orders/{id}/cancel"] == nil {
+		t.Fatalf("expected path map, got %+v", spec["paths"])
+	}
+}
+
+func TestOpenAPISpecIncludesAllMetadataEndpoints(t *testing.T) {
+	paths := openAPISpec()["paths"].(map[string]any)
+	for endpoint := range endpointMap() {
+		if paths[endpoint] == nil {
+			t.Fatalf("expected openapi spec to include %s", endpoint)
+		}
+	}
+}
+
 func TestConflictsRouteReturnsAttentionGroups(t *testing.T) {
 	manager := newHTTPTestManager(t)
 	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})
@@ -206,4 +273,8 @@ func newHTTPTestManager(t *testing.T) *trading.Manager {
 		}
 	}
 	return manager
+}
+
+func intPtr(value int) *int {
+	return &value
 }

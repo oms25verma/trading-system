@@ -9,6 +9,7 @@ This is a small starter service for managing trades through a broker adapter. It
 - dashboard summary for counts, conflicts, warnings, and active orders
 - conflict queue for groups that need operator attention
 - orderbook cancellation for open synced orders
+- metadata and OpenAPI endpoints for frontend bootstrap
 - app-managed trailing stop-loss by polling LTP and modifying the stop order
 - paper broker mode for local testing
 - Kite HTTP adapter using Kite Connect v3 endpoints
@@ -23,6 +24,13 @@ The server starts on `:8080` and uses the paper broker by default.
 
 ```bash
 curl http://localhost:8080/healthz
+```
+
+For frontend bootstrap and API discovery:
+
+```bash
+curl http://localhost:8080/metadata
+curl http://localhost:8080/openapi.json
 ```
 
 Trades, synced orderbook snapshots, and synced position snapshots are persisted date-wise by default, for example `data/trades_24_05_2026.json`, `data/orders_24_05_2026.json`, and `data/positions_24_05_2026.json`, so local trade ids and the latest sync survive server restarts on the same trading day. Override the directory or exact trade file with:

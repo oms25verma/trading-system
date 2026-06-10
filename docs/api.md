@@ -32,6 +32,17 @@ BROKER
 GET /healthz
 ```
 
+## API Metadata
+
+```http
+GET /metadata
+GET /openapi.json
+```
+
+`/metadata` returns frontend bootstrap data: safe runtime defaults, enums, endpoint list, and feature capabilities. Sensitive values such as Kite secrets and access tokens are never returned.
+
+`/openapi.json` returns a starter OpenAPI 3 path map for frontend tooling and API discovery.
+
 ## Dashboard
 
 ```http

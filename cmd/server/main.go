@@ -114,6 +114,12 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /metadata", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, buildMetadata(cfg))
+	})
+	mux.HandleFunc("GET /openapi.json", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, openAPISpec())
+	})
 	mux.HandleFunc("GET /dashboard", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, manager.DashboardSummary())
 	})
