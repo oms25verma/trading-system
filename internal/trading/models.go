@@ -138,6 +138,12 @@ type PositionGroup struct {
 	TradeStatus          string    `json:"trade_status"`
 	CreationSource       string    `json:"creation_source"`
 	ManagementStatus     string    `json:"management_status"`
+	StopLossCount        int       `json:"stop_loss_count,omitempty"`
+	TargetCount          int       `json:"target_count,omitempty"`
+	StopLoss             *StopLoss `json:"stop_loss,omitempty"`
+	Target               *Target   `json:"target,omitempty"`
+	ExitOrderID          string    `json:"exit_order_id,omitempty"`
+	ExitPending          bool      `json:"exit_pending,omitempty"`
 	ConvertedFromProduct string    `json:"converted_from_product,omitempty"`
 	ConvertedToProduct   string    `json:"converted_to_product,omitempty"`
 	Warnings             []string  `json:"warnings,omitempty"`

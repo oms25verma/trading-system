@@ -59,6 +59,12 @@ export interface PositionGroup {
   trade_status: string;
   creation_source: string;
   management_status: ManagementStatus | string;
+  stop_loss_count?: number;
+  target_count?: number;
+  stop_loss?: StopLoss;
+  target?: Target;
+  exit_order_id?: string;
+  exit_pending?: boolean;
   converted_from_product?: string;
   converted_to_product?: string;
   warnings?: string[];

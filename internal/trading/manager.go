@@ -2233,6 +2233,7 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		if trade.EntryPrice > 0 {
 			group.AverageEntryPrice += trade.EntryPrice * float64(trade.Quantity)
 		}
+		applyTradeProtectionToGroup(group, trade)
 		if trade.CreatedAt.Before(group.CreatedAt) {
 			group.CreatedAt = trade.CreatedAt
 		}
@@ -2314,6 +2315,36 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		return groups[i].ID < groups[j].ID
 	})
 	return groups
+}
+
+func applyTradeProtectionToGroup(group *PositionGroup, trade *ManagedTrade) {
+	if group == nil || trade == nil {
+		return
+	}
+	if trade.StopLoss != nil {
+		group.StopLossCount++
+		if group.StopLossCount == 1 {
+			group.StopLoss = cloneStopLoss(trade.StopLoss)
+		} else {
+			group.StopLoss = nil
+		}
+	}
+	if trade.Target != nil {
+		group.TargetCount++
+		if group.TargetCount == 1 {
+			group.Target = cloneTarget(trade.Target)
+		} else {
+			group.Target = nil
+		}
+	}
+	if trade.ExitOrderID != "" {
+		if group.ExitOrderID == "" {
+			group.ExitOrderID = trade.ExitOrderID
+		} else if group.ExitOrderID != trade.ExitOrderID {
+			group.ExitOrderID = "MULTIPLE"
+		}
+		group.ExitPending = true
+	}
 }
 
 func (m *Manager) applyExternalExitConflictWarningsLocked(group *PositionGroup) {

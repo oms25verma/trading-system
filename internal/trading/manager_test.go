@@ -235,6 +235,48 @@ func TestListGroupsAggregatesOpenSameSideTrades(t *testing.T) {
 	}
 }
 
+func TestListGroupsIncludesProtectionSummary(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      1,
+		Product:       "MIS",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 90, LimitPrice: 89}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddTarget(context.Background(), trade.ID, TargetRequest{Price: 120}); err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.QueueAMOExit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	groups := manager.ListGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected one group, got %d", len(groups))
+	}
+	group := groups[0]
+	if group.StopLossCount != 1 || group.StopLoss == nil || group.StopLoss.TriggerPrice != 90 || group.StopLoss.LimitPrice != 89 {
+		t.Fatalf("unexpected stop-loss summary: %+v", group)
+	}
+	if group.TargetCount != 1 || group.Target == nil || group.Target.Price != 120 {
+		t.Fatalf("unexpected target summary: %+v", group)
+	}
+	if !group.ExitPending || group.ExitOrderID != trade.ExitOrderID {
+		t.Fatalf("expected exit pending summary, got %+v", group)
+	}
+}
+
 func TestEnterRejectsOppositeSideWhenActiveGroupExists(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)

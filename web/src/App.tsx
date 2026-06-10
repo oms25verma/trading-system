@@ -454,6 +454,8 @@ function GroupTable(props: {
             <th>Side</th>
             <th>Qty</th>
             <th>Avg Entry</th>
+            <th>SL</th>
+            <th>Target</th>
             <th>Local/Broker</th>
             <th>Status</th>
             {!props.compact && <th>Warnings</th>}
@@ -470,6 +472,8 @@ function GroupTable(props: {
               <td>{group.side ? <SidePill side={group.side} /> : '-'}</td>
               <td>{group.quantity}</td>
               <td>{money(group.average_entry_price)}</td>
+              <td>{groupProtectionLabel(group, 'stop-loss')}</td>
+              <td>{groupProtectionLabel(group, 'target')}</td>
               <td>{group.local_quantity ?? 0}/{group.broker_quantity ?? 0}</td>
               <td><ManagementPill status={group.management_status} /></td>
               {!props.compact && <td><WarningChips warnings={group.warnings ?? []} /></td>}
@@ -482,10 +486,10 @@ function GroupTable(props: {
                   ) : (
                     <>
                       <button className="icon-button" onClick={() => props.actions?.onStopLoss(group)} title="Set stop-loss" aria-label="Set stop-loss"><Shield /></button>
-                      <button className="icon-button danger" onClick={() => props.actions?.onRemoveStopLoss?.(group)} title="Remove stop-loss" aria-label="Remove stop-loss"><XCircle /></button>
+                      {(group.stop_loss_count ?? 0) > 0 && <button className="icon-button danger" onClick={() => props.actions?.onRemoveStopLoss?.(group)} title="Remove stop-loss" aria-label="Remove stop-loss"><XCircle /></button>}
                       <button className="icon-button" onClick={() => props.actions?.onTarget(group)} title="Set target" aria-label="Set target"><Target /></button>
-                      <button className="icon-button danger" onClick={() => props.actions?.onRemoveTarget?.(group)} title="Remove target" aria-label="Remove target"><XCircle /></button>
-                      <button className="icon-button" onClick={() => props.actions?.onAMOExit?.(group)} title="Queue AMO exit" aria-label="Queue AMO exit"><Clock3 /></button>
+                      {(group.target_count ?? 0) > 0 && <button className="icon-button danger" onClick={() => props.actions?.onRemoveTarget?.(group)} title="Remove target" aria-label="Remove target"><XCircle /></button>}
+                      {!group.exit_pending && <button className="icon-button" onClick={() => props.actions?.onAMOExit?.(group)} title="Queue AMO exit" aria-label="Queue AMO exit"><Clock3 /></button>}
                       <button className="icon-button danger" onClick={() => props.actions?.onExit(group)} title="Exit group" aria-label="Exit group"><LogOut /></button>
                     </>
                   )}
@@ -846,6 +850,18 @@ function symbolKey(symbol: { exchange: string; tradingsymbol: string; product: s
 function symbolLabel(symbol: { exchange: string; tradingsymbol: string; product: string; name?: string }) {
   const instrument = `${symbol.exchange}:${symbol.tradingsymbol}`;
   return symbol.name ? `${symbol.name} · ${instrument} · ${symbol.product}` : `${instrument} · ${symbol.product}`;
+}
+
+function groupProtectionLabel(group: PositionGroup, type: 'stop-loss' | 'target') {
+  const count = type === 'stop-loss' ? group.stop_loss_count ?? 0 : group.target_count ?? 0;
+  if (count === 0) return '-';
+  if (type === 'stop-loss' && count === 1 && group.stop_loss) {
+    return `${money(group.stop_loss.trigger_price)} / ${money(group.stop_loss.limit_price)}`;
+  }
+  if (type === 'target' && count === 1 && group.target) {
+    return money(group.target.price);
+  }
+  return `${count} set`;
 }
 
 function optionalNumber(value: string) {
