@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"trading-system/internal/config"
@@ -118,6 +122,7 @@ func TestMetadataRouteReturnsRuntimeDefaultsAndEnums(t *testing.T) {
 		DefaultTargetPoints:     20,
 		DefaultSLLimitOffset:    1,
 		LogLevel:                "debug",
+		ErrorLogPath:            "data/error.log",
 	}
 	handler := routes(manager, kite.NewClient("", "", ""), cfg)
 
@@ -135,11 +140,61 @@ func TestMetadataRouteReturnsRuntimeDefaultsAndEnums(t *testing.T) {
 	if metadata.Runtime.DefaultQuantity != 2 || metadata.Runtime.DefaultMarketProtection == nil || *metadata.Runtime.DefaultMarketProtection != 5 {
 		t.Fatalf("unexpected runtime defaults: %+v", metadata.Runtime)
 	}
+	if metadata.Runtime.ErrorLogPath != "data/error.log" {
+		t.Fatalf("expected error log path in metadata, got %+v", metadata.Runtime)
+	}
 	if len(metadata.Runtime.SymbolWatchlist) != 1 || metadata.Runtime.SymbolWatchlist[0].TradingSymbol != "INFY" {
 		t.Fatalf("expected symbol watchlist in metadata, got %+v", metadata.Runtime.SymbolWatchlist)
 	}
 	if len(metadata.Enums.Sides) == 0 || len(metadata.Endpoints["/trades"]) == 0 {
 		t.Fatalf("expected enums and endpoints, got %+v", metadata)
+	}
+}
+
+func TestNewLoggerTruncatesAndWritesWarnAndErrorFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "logs", "error.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("old log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger, closeLogger := newLogger(config.Config{LogLevel: "debug", ErrorLogPath: path})
+	logger.Info("ordinary_info")
+	logger.Warn("warning_event", "code", "warn_code")
+	logger.Error("error_event", "code", "error_code")
+	closeLogger()
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(payload)
+	if strings.Contains(body, "old log") {
+		t.Fatalf("expected log file to be truncated on startup, got %q", body)
+	}
+	if strings.Contains(body, "ordinary_info") {
+		t.Fatalf("expected info log to stay out of error log, got %q", body)
+	}
+	if !strings.Contains(body, "warning_event") || !strings.Contains(body, "error_event") {
+		t.Fatalf("expected warn and error records in error log, got %q", body)
+	}
+}
+
+func TestTeeHandlerPreservesAttrsAndGroups(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "error.log")
+	logger, closeLogger := newLogger(config.Config{LogLevel: "warn", ErrorLogPath: path})
+	logger.WithGroup("api").With("request_id", "req-1").Warn("api_error", slog.String("code", "invalid_quantity"))
+	closeLogger()
+
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(payload)
+	if !strings.Contains(body, "req-1") || !strings.Contains(body, "invalid_quantity") {
+		t.Fatalf("expected grouped attrs in error log, got %q", body)
 	}
 }
 

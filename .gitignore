@@ -1,5 +1,6 @@
 data/*.json
 data/*.json.tmp
+data/*.log
 todo.md
 web/node_modules/
 web/dist/

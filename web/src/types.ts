@@ -133,6 +133,7 @@ export interface Metadata {
     poll_seconds: number;
     sync_poll_seconds: number;
     log_level: string;
+    error_log_path: string;
     default_product: string;
     default_quantity: number;
     default_market_protection?: number;

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,7 +22,8 @@ import (
 
 func main() {
 	cfg := config.Load()
-	logger := newLogger(cfg)
+	logger, closeLogger := newLogger(cfg)
+	defer closeLogger()
 	slog.SetDefault(logger)
 
 	brokerName := os.Getenv("BROKER")
@@ -96,7 +98,7 @@ func requestIDMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
 	})
 }
 
-func newLogger(cfg config.Config) *slog.Logger {
+func newLogger(cfg config.Config) (*slog.Logger, func()) {
 	level := slog.LevelInfo
 	switch strings.ToLower(cfg.LogLevel) {
 	case "debug":
@@ -106,7 +108,74 @@ func newLogger(cfg config.Config) *slog.Logger {
 	case "error":
 		level = slog.LevelError
 	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+
+	stdoutHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	errorFile, err := openErrorLogFile(cfg.ErrorLogPath)
+	if err != nil {
+		logger := slog.New(stdoutHandler)
+		logger.Warn("error_log_file_unavailable", "path", cfg.ErrorLogPath, "error", err)
+		return logger, func() {}
+	}
+	errorHandler := slog.NewJSONHandler(errorFile, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(teeHandler{handlers: []slog.Handler{stdoutHandler, errorHandler}})
+	return logger, func() {
+		_ = errorFile.Close()
+	}
+}
+
+func openErrorLogFile(path string) (*os.File, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("empty error log path")
+	}
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+}
+
+type teeHandler struct {
+	handlers []slog.Handler
+}
+
+func (h teeHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, handler := range h.handlers {
+		if handler.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h teeHandler) Handle(ctx context.Context, record slog.Record) error {
+	var result error
+	for _, handler := range h.handlers {
+		if !handler.Enabled(ctx, record.Level) {
+			continue
+		}
+		if err := handler.Handle(ctx, record.Clone()); err != nil {
+			result = errors.Join(result, err)
+		}
+	}
+	return result
+}
+
+func (h teeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	handlers := make([]slog.Handler, 0, len(h.handlers))
+	for _, handler := range h.handlers {
+		handlers = append(handlers, handler.WithAttrs(attrs))
+	}
+	return teeHandler{handlers: handlers}
+}
+
+func (h teeHandler) WithGroup(name string) slog.Handler {
+	handlers := make([]slog.Handler, 0, len(h.handlers))
+	for _, handler := range h.handlers {
+		handlers = append(handlers, handler.WithGroup(name))
+	}
+	return teeHandler{handlers: handlers}
 }
 
 func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config) http.Handler {

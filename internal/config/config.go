@@ -29,6 +29,7 @@ type Config struct {
 	EnforceSymbolWatchlist  bool
 	RequireOrderProtection  bool
 	LogLevel                string
+	ErrorLogPath            string
 }
 
 type SymbolWatchItem struct {
@@ -92,6 +93,7 @@ func Load() Config {
 		EnforceSymbolWatchlist:  boolEnv("ENFORCE_SYMBOL_WATCHLIST", true),
 		RequireOrderProtection:  boolEnv("REQUIRE_ORDER_PROTECTION", false),
 		LogLevel:                stringEnv("LOG_LEVEL", "info"),
+		ErrorLogPath:            stringEnv("ERROR_LOG_PATH", "data/error.log"),
 	}
 }
 
@@ -250,6 +252,9 @@ func (c Config) Validate(broker string) error {
 	}
 	if c.TradeStorePath == "" {
 		return fmt.Errorf("TRADE_STORE_PATH is required")
+	}
+	if c.ErrorLogPath == "" {
+		return fmt.Errorf("ERROR_LOG_PATH is required")
 	}
 	if c.symbolWatchlistErr != nil {
 		return c.symbolWatchlistErr

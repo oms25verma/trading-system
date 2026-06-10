@@ -21,6 +21,7 @@ type runtimeMetadata struct {
 	PollSeconds             int              `json:"poll_seconds"`
 	SyncPollSeconds         int              `json:"sync_poll_seconds"`
 	LogLevel                string           `json:"log_level"`
+	ErrorLogPath            string           `json:"error_log_path"`
 	DefaultProduct          string           `json:"default_product"`
 	DefaultQuantity         int              `json:"default_quantity"`
 	DefaultMarketProtection *int             `json:"default_market_protection,omitempty"`
@@ -86,6 +87,7 @@ func buildMetadata(cfg config.Config) metadataResponse {
 			PollSeconds:             int(cfg.PollInterval.Seconds()),
 			SyncPollSeconds:         int(cfg.SyncPollInterval.Seconds()),
 			LogLevel:                cfg.LogLevel,
+			ErrorLogPath:            cfg.ErrorLogPath,
 			DefaultProduct:          cfg.DefaultProduct,
 			DefaultQuantity:         cfg.DefaultQuantity,
 			DefaultMarketProtection: cfg.DefaultMarketProtection,
