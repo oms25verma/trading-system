@@ -6,6 +6,7 @@ import {
   Ban,
   CheckCircle2,
   CircleDollarSign,
+  Clock3,
   Crosshair,
   ExternalLink,
   LayoutDashboard,
@@ -177,6 +178,9 @@ export function App() {
                 onStopLoss={(group) => setAction({ type: 'stop-loss', group })}
                 onTarget={(group) => setAction({ type: 'target', group })}
                 onExit={(group) => void run('Exited group', () => api.exitGroup(group.id))}
+                onAMOExit={(group) => void run('Queued AMO exit', () => api.queueAMOExitGroup(group.id))}
+                onRemoveStopLoss={(group) => void run('Removed group stop-loss', () => api.removeGroupStopLoss(group.id))}
+                onRemoveTarget={(group) => void run('Removed group target', () => api.removeGroupTarget(group.id))}
                 onTakeOver={(group) => setAction({ type: 'take-over', group })}
               />
             )}
@@ -189,6 +193,9 @@ export function App() {
                 onStopLoss={(trade) => setAction({ type: 'stop-loss', trade })}
                 onTarget={(trade) => setAction({ type: 'target', trade })}
                 onExit={(trade) => void run('Exited trade', () => api.exitTrade(trade.id))}
+                onAMOExit={(trade) => void run('Queued AMO exit', () => api.queueAMOExitTrade(trade.id))}
+                onRemoveStopLoss={(trade) => void run('Removed stop-loss', () => api.removeStopLoss(trade.id))}
+                onRemoveTarget={(trade) => void run('Removed target', () => api.removeTarget(trade.id))}
                 onCancelEntry={(trade) => void run('Cancelled entry', () => api.cancelEntry(trade.id))}
               />
             )}
@@ -270,6 +277,9 @@ function GroupsView(props: {
   onStopLoss: (group: PositionGroup) => void;
   onTarget: (group: PositionGroup) => void;
   onExit: (group: PositionGroup) => void;
+  onAMOExit: (group: PositionGroup) => void;
+  onRemoveStopLoss: (group: PositionGroup) => void;
+  onRemoveTarget: (group: PositionGroup) => void;
   onTakeOver: (group: PositionGroup) => void;
 }) {
   return (
@@ -340,6 +350,9 @@ function TradesView(props: {
   onStopLoss: (trade: ManagedTrade) => void;
   onTarget: (trade: ManagedTrade) => void;
   onExit: (trade: ManagedTrade) => void;
+  onAMOExit: (trade: ManagedTrade) => void;
+  onRemoveStopLoss: (trade: ManagedTrade) => void;
+  onRemoveTarget: (trade: ManagedTrade) => void;
   onCancelEntry: (trade: ManagedTrade) => void;
 }) {
   return (
@@ -375,8 +388,11 @@ function TradesView(props: {
                   {trade.trade_status !== 'CLOSED' && (
                     <>
                       <button className="icon-button" onClick={() => props.onStopLoss(trade)} title="Set stop-loss" aria-label="Set stop-loss"><Shield /></button>
+                      {trade.stop_loss && <button className="icon-button danger" onClick={() => props.onRemoveStopLoss(trade)} title="Remove stop-loss" aria-label="Remove stop-loss"><XCircle /></button>}
                       <button className="icon-button" onClick={() => props.onTarget(trade)} title="Set target" aria-label="Set target"><Target /></button>
+                      {trade.target && <button className="icon-button danger" onClick={() => props.onRemoveTarget(trade)} title="Remove target" aria-label="Remove target"><XCircle /></button>}
                       {trade.entry_status !== 'COMPLETE' && <button className="icon-button danger" onClick={() => props.onCancelEntry(trade)} title="Cancel entry" aria-label="Cancel entry"><Trash2 /></button>}
+                      {trade.entry_status === 'COMPLETE' && !trade.exit_order_id && <button className="icon-button" onClick={() => props.onAMOExit(trade)} title="Queue AMO exit" aria-label="Queue AMO exit"><Clock3 /></button>}
                       <button className="icon-button danger" onClick={() => props.onExit(trade)} title="Exit trade" aria-label="Exit trade"><LogOut /></button>
                     </>
                   )}
@@ -423,6 +439,9 @@ function GroupTable(props: {
     onStopLoss: (group: PositionGroup) => void;
     onTarget: (group: PositionGroup) => void;
     onExit: (group: PositionGroup) => void;
+    onAMOExit?: (group: PositionGroup) => void;
+    onRemoveStopLoss?: (group: PositionGroup) => void;
+    onRemoveTarget?: (group: PositionGroup) => void;
     onTakeOver: (group: PositionGroup) => void;
   };
 }) {
@@ -463,7 +482,10 @@ function GroupTable(props: {
                   ) : (
                     <>
                       <button className="icon-button" onClick={() => props.actions?.onStopLoss(group)} title="Set stop-loss" aria-label="Set stop-loss"><Shield /></button>
+                      <button className="icon-button danger" onClick={() => props.actions?.onRemoveStopLoss?.(group)} title="Remove stop-loss" aria-label="Remove stop-loss"><XCircle /></button>
                       <button className="icon-button" onClick={() => props.actions?.onTarget(group)} title="Set target" aria-label="Set target"><Target /></button>
+                      <button className="icon-button danger" onClick={() => props.actions?.onRemoveTarget?.(group)} title="Remove target" aria-label="Remove target"><XCircle /></button>
+                      <button className="icon-button" onClick={() => props.actions?.onAMOExit?.(group)} title="Queue AMO exit" aria-label="Queue AMO exit"><Clock3 /></button>
                       <button className="icon-button danger" onClick={() => props.actions?.onExit(group)} title="Exit group" aria-label="Exit group"><LogOut /></button>
                     </>
                   )}
@@ -860,7 +882,12 @@ function dash(value: string) {
 }
 
 function errorMessage(err: unknown) {
-  if (err instanceof ApiError) return `${err.body?.code ?? err.status}: ${err.message}`;
+  if (err instanceof ApiError) {
+    if (err.body?.code === 'market_closed_amo_required') {
+      return 'Market is closed for regular exit. Use Queue AMO Exit only if you want to place the square-off for the next session.';
+    }
+    return `${err.body?.code ?? err.status}: ${err.message}`;
+  }
   if (err instanceof Error) return err.message;
   return 'Unexpected error';
 }

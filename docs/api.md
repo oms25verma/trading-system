@@ -289,6 +289,7 @@ DELETE /groups/{id}/stop-loss
 POST   /groups/{id}/target
 DELETE /groups/{id}/target
 POST   /groups/{id}/exit
+POST   /groups/{id}/exit/amo
 POST   /groups/{id}/cancel-entry
 ```
 
@@ -494,7 +495,15 @@ Cancels live Kite target orders or clears pending local target state.
 POST /trades/{id}/exit
 ```
 
-For completed entries, cancels SL/target and places a market order in the opposite direction.
+For completed entries, places a market order in the opposite direction. After Kite accepts the square-off order, the service cancels linked SL/target orders. If Kite rejects the square-off order, existing protection is left untouched.
+
+To explicitly queue an after-market exit order:
+
+```http
+POST /trades/{id}/exit/amo
+```
+
+AMO exit places the opposite-side order with Kite variety `amo`. The trade remains open locally because queued AMO placement does not guarantee execution. Keep syncing with Kite/orderbook after the next session starts so the real position state can reconcile.
 
 For open `LIMIT` entries that are not filled yet, this safely cancels the pending entry order instead of placing a reverse market order. The trade is closed locally with `exit_reason: "ENTRY_CANCELLED"`.
 

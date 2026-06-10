@@ -658,6 +658,63 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 	return result, nil
 }
 
+func (m *Manager) QueueAMOExit(ctx context.Context, id string) (*ManagedTrade, error) {
+	trade, err := m.get(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureTradeOpen(trade); err != nil {
+		return nil, err
+	}
+	if err := m.ensureTradeProductCurrent(trade); err != nil {
+		return nil, err
+	}
+	if trade.ExitOrderID != "" {
+		return nil, conflictError("exit_order_already_exists", "an exit order is already linked to this trade")
+	}
+	if !strings.EqualFold(trade.EntryStatus, OrderStatusComplete) {
+		status, err := m.broker.OrderStatus(ctx, "regular", trade.EntryOrderID)
+		if err != nil {
+			return nil, fmt.Errorf("entry order status check failed before AMO exit: %w", err)
+		}
+		if !strings.EqualFold(status, OrderStatusComplete) {
+			return nil, conflictError("entry_not_complete", "AMO exit can only be queued after the entry is complete")
+		}
+		if err := m.updateEntryStatus(id, OrderStatusComplete); err != nil {
+			return nil, err
+		}
+		trade.EntryStatus = OrderStatusComplete
+	}
+
+	exitOrderID, err := m.broker.PlaceOrder(ctx, Order{
+		Exchange:         trade.Exchange,
+		TradingSymbol:    trade.TradingSymbol,
+		TransactionType:  opposite(trade.Side),
+		Quantity:         trade.Quantity,
+		Product:          trade.Product,
+		OrderType:        "MARKET",
+		Variety:          "amo",
+		Validity:         "DAY",
+		MarketProtection: intPtr(-1),
+		Tag:              LocalSystemOrderTag,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	current := m.trades[id]
+	current.ExitOrderID = exitOrderID
+	current.UpdatedAt = time.Now().UTC()
+	result := cloneTrade(current)
+	m.mu.Unlock()
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+	m.logTradeEvent(ctx, "trade_amo_exit_queued", result)
+	return result, nil
+}
+
 func (m *Manager) CancelEntry(ctx context.Context, id string) (*ManagedTrade, error) {
 	trade, err := m.get(id)
 	if err != nil {
@@ -942,6 +999,14 @@ func (m *Manager) ExitGroup(ctx context.Context, groupID string) (*ManagedTrade,
 		return nil, err
 	}
 	return m.Exit(ctx, trade.ID)
+}
+
+func (m *Manager) QueueGroupAMOExit(ctx context.Context, groupID string) (*ManagedTrade, error) {
+	trade, err := m.singleManagedTradeForGroup(groupID)
+	if err != nil {
+		return nil, err
+	}
+	return m.QueueAMOExit(ctx, trade.ID)
 }
 
 func (m *Manager) CancelGroupEntry(ctx context.Context, groupID string) (*ManagedTrade, error) {

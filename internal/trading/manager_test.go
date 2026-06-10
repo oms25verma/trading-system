@@ -404,6 +404,48 @@ func TestExitKeepsClosedTradeAndProtectionDetailsWhenCancelFails(t *testing.T) {
 	}
 }
 
+func TestQueueAMOExitKeepsTradeOpenAndProtectionActive(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NFO",
+		TradingSymbol: "NIFTY2661623550PE",
+		Side:          "SELL",
+		Quantity:      520,
+		Product:       "NRML",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trade, err = manager.AddStopLoss(context.Background(), trade.ID, StopLossRequest{TriggerPrice: 210, LimitPrice: 211})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trade, err = manager.QueueAMOExit(context.Background(), trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trade.TradeStatus != TradeStatusOpen || trade.ExitOrderID == "" {
+		t.Fatalf("expected AMO exit to remain open with exit order id, got %+v", trade)
+	}
+	exitOrder := broker.orders[trade.ExitOrderID]
+	if exitOrder.Variety != "amo" || exitOrder.TransactionType != "BUY" || exitOrder.OrderType != "MARKET" {
+		t.Fatalf("unexpected AMO exit order: %+v", exitOrder)
+	}
+	if trade.StopLoss == nil || trade.StopOrderStatus != OrderStatusOpen || broker.cancelCount != 0 {
+		t.Fatalf("expected protection to remain active, trade=%+v cancel_count=%d", trade, broker.cancelCount)
+	}
+
+	_, err = manager.QueueAMOExit(context.Background(), trade.ID)
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "exit_order_already_exists" {
+		t.Fatalf("expected duplicate AMO exit to fail, got %v", err)
+	}
+}
+
 func TestSyncKiteOrdersInfersCreationSource(t *testing.T) {
 	broker := newFakeBroker()
 	broker.synced = []KiteOrder{

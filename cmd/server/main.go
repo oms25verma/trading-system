@@ -259,6 +259,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		trade, err := manager.Exit(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
 	})
+	mux.HandleFunc("POST /trades/{id}/exit/amo", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.QueueAMOExit(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
 	mux.HandleFunc("POST /trades/{id}/cancel-entry", func(w http.ResponseWriter, r *http.Request) {
 		trade, err := manager.CancelEntry(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
@@ -309,6 +313,10 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	})
 	mux.HandleFunc("POST /groups/{id}/exit", func(w http.ResponseWriter, r *http.Request) {
 		trade, err := manager.ExitGroup(r.Context(), r.PathValue("id"))
+		writeResult(r.Context(), w, trade, err)
+	})
+	mux.HandleFunc("POST /groups/{id}/exit/amo", func(w http.ResponseWriter, r *http.Request) {
+		trade, err := manager.QueueGroupAMOExit(r.Context(), r.PathValue("id"))
 		writeResult(r.Context(), w, trade, err)
 	})
 	mux.HandleFunc("POST /groups/{id}/cancel-entry", func(w http.ResponseWriter, r *http.Request) {

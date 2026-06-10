@@ -71,13 +71,17 @@ export const api = {
   addTarget: (tradeID: string, body: TargetRequest) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/target`, body),
   removeTarget: (tradeID: string) => del<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/target`),
   exitTrade: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/exit`),
+  queueAMOExitTrade: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/exit/amo`),
   cancelEntry: (tradeID: string) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/cancel-entry`),
   takeOverGroup: (groupID: string, entryPrice?: number) =>
     post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/take-over`, entryPrice ? { entry_price: entryPrice } : undefined),
   addGroupStopLoss: (groupID: string, body: StopLossRequest) =>
     post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/stop-loss`, body),
+  removeGroupStopLoss: (groupID: string) => del<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/stop-loss`),
   addGroupTarget: (groupID: string, body: TargetRequest) => post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/target`, body),
+  removeGroupTarget: (groupID: string) => del<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/target`),
   exitGroup: (groupID: string) => post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/exit`),
+  queueAMOExitGroup: (groupID: string) => post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/exit/amo`),
   cancelOrder: (orderID: string) => post<unknown>(`/orders/${encodeURIComponent(orderID)}/cancel`),
   linkExternalExit: (groupID: string, orderID: string, role: string) =>
     post<ManagedTrade>(`/groups/${encodeURIComponent(groupID)}/external-exit/link`, { order_id: orderID, role }),
