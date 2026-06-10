@@ -207,8 +207,8 @@ func filterOrders(orders []*trading.KiteOrder, r *http.Request) []*trading.KiteO
 }
 
 func sortOrders(orders []*trading.KiteOrder, r *http.Request) {
-	sortBy := strings.ToLower(valueOr(r.URL.Query().Get("sort_by"), "synced_at"))
-	desc := sortDesc(r)
+	sortBy := strings.ToLower(valueOr(r.URL.Query().Get("sort_by"), "order_timestamp"))
+	desc := sortDescDefault(r, true)
 	sort.SliceStable(orders, func(i, j int) bool {
 		cmp := 0
 		switch sortBy {
@@ -222,8 +222,10 @@ func sortOrders(orders []*trading.KiteOrder, r *http.Request) {
 			cmp = compareFloat(orders[i].Price, orders[j].Price)
 		case "order_id":
 			cmp = strings.Compare(orders[i].OrderID, orders[j].OrderID)
-		default:
+		case "synced_at":
 			cmp = compareTime(orders[i].SyncedAt, orders[j].SyncedAt)
+		default:
+			cmp = compareTime(orderTimestamp(orders[i]), orderTimestamp(orders[j]))
 		}
 		return compareForSort(cmp, desc)
 	})
@@ -292,7 +294,14 @@ func queryContains(r *http.Request, name string, values []string) bool {
 }
 
 func sortDesc(r *http.Request) bool {
+	return sortDescDefault(r, false)
+}
+
+func sortDescDefault(r *http.Request, fallback bool) bool {
 	dir := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort_dir")))
+	if dir == "" {
+		return fallback
+	}
 	return dir == "desc" || dir == "descending"
 }
 
@@ -311,6 +320,16 @@ func compareTime(left, right time.Time) int {
 		return 1
 	}
 	return 0
+}
+
+func orderTimestamp(order *trading.KiteOrder) time.Time {
+	if order == nil {
+		return time.Time{}
+	}
+	if !order.OrderTimestamp.IsZero() {
+		return order.OrderTimestamp
+	}
+	return order.SyncedAt
 }
 
 func compareInt(left, right int) int {

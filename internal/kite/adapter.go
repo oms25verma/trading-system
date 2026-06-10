@@ -2,6 +2,8 @@ package kite
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"trading-system/internal/trading"
 )
@@ -80,9 +82,36 @@ func (a *Adapter) Orders(ctx context.Context) ([]trading.KiteOrder, error) {
 			TriggerPrice:    order.TriggerPrice,
 			AveragePrice:    order.AveragePrice,
 			Tag:             order.Tag,
+			OrderTimestamp:  kiteOrderTime(order),
 		})
 	}
 	return out, nil
+}
+
+func kiteOrderTime(order OrderStatusResponse) time.Time {
+	for _, raw := range []string{order.OrderTimestamp, order.ExchangeUpdateTimestamp, order.ExchangeTimestamp} {
+		if parsed, ok := parseKiteTimestamp(raw); ok {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func parseKiteTimestamp(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		time.RFC3339,
+	} {
+		parsed, err := time.ParseInLocation(layout, raw, time.Local)
+		if err == nil {
+			return parsed.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (a *Adapter) Positions(ctx context.Context) ([]trading.Position, error) {

@@ -20,6 +20,7 @@ type fakeBroker struct {
 	modifyCount int
 	cancelCount int
 	ltp         float64
+	placeErr    error
 }
 
 func newFakeBroker() *fakeBroker {
@@ -33,6 +34,9 @@ func newFakeBroker() *fakeBroker {
 func (f *fakeBroker) PlaceOrder(_ context.Context, order Order) (string, error) {
 	f.nextID++
 	f.placeCount++
+	if f.placeErr != nil {
+		return "", f.placeErr
+	}
 	id := "order-" + strconv.Itoa(f.nextID)
 	f.orders[id] = order
 	if order.OrderType == "MARKET" {
@@ -303,6 +307,41 @@ func TestLocalSystemOrdersUseTag(t *testing.T) {
 	}
 	if broker.orders[trade.ExitOrderID].Tag != LocalSystemOrderTag {
 		t.Fatalf("expected exit order tag %q, got %q", LocalSystemOrderTag, broker.orders[trade.ExitOrderID].Tag)
+	}
+}
+
+func TestExitMapsAMORequiredBrokerErrorAndKeepsTradeOpen(t *testing.T) {
+	broker := newFakeBroker()
+	manager := NewManager(broker)
+
+	trade, err := manager.Enter(context.Background(), CreateTradeRequest{
+		Exchange:      "NFO",
+		TradingSymbol: "NIFTY2661623550PE",
+		Side:          "SELL",
+		Quantity:      520,
+		Product:       "NRML",
+		OrderType:     "MARKET",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.placeErr = errors.New(`kite POST /orders/regular failed: status=400 body={"status":"error","message":"Your order could not be converted to a After Market Order (AMO).","data":{"hints":["switch_to_amo"]},"error_type":"InputException"}`)
+	_, err = manager.Exit(context.Background(), trade.ID)
+	if err == nil {
+		t.Fatal("expected AMO-required exit to fail")
+	}
+	var domainErr *DomainError
+	if !errors.As(err, &domainErr) || domainErr.Code != "market_closed_amo_required" {
+		t.Fatalf("expected market_closed_amo_required, got %v", err)
+	}
+
+	current, err := manager.get(trade.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.TradeStatus != TradeStatusOpen || current.ExitOrderID != "" {
+		t.Fatalf("expected trade to remain open without exit order, got %+v", current)
 	}
 }
 

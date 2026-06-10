@@ -96,20 +96,23 @@ type OrderResponse struct {
 }
 
 type OrderStatusResponse struct {
-	OrderID         string  `json:"order_id"`
-	Exchange        string  `json:"exchange"`
-	TradingSymbol   string  `json:"tradingsymbol"`
-	TransactionType string  `json:"transaction_type"`
-	Quantity        int     `json:"quantity"`
-	Product         string  `json:"product"`
-	OrderType       string  `json:"order_type"`
-	Status          string  `json:"status"`
-	Price           float64 `json:"price"`
-	TriggerPrice    float64 `json:"trigger_price"`
-	AveragePrice    float64 `json:"average_price"`
-	FilledQuantity  int     `json:"filled_quantity"`
-	PendingQuantity int     `json:"pending_quantity"`
-	Tag             string  `json:"tag"`
+	OrderID                 string  `json:"order_id"`
+	Exchange                string  `json:"exchange"`
+	TradingSymbol           string  `json:"tradingsymbol"`
+	TransactionType         string  `json:"transaction_type"`
+	Quantity                int     `json:"quantity"`
+	Product                 string  `json:"product"`
+	OrderType               string  `json:"order_type"`
+	Status                  string  `json:"status"`
+	Price                   float64 `json:"price"`
+	TriggerPrice            float64 `json:"trigger_price"`
+	AveragePrice            float64 `json:"average_price"`
+	FilledQuantity          int     `json:"filled_quantity"`
+	PendingQuantity         int     `json:"pending_quantity"`
+	Tag                     string  `json:"tag"`
+	OrderTimestamp          string  `json:"order_timestamp"`
+	ExchangeTimestamp       string  `json:"exchange_timestamp"`
+	ExchangeUpdateTimestamp string  `json:"exchange_update_timestamp"`
 }
 
 func (c *Client) PlaceOrder(ctx context.Context, order OrderRequest) (string, error) {

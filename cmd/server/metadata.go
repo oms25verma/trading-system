@@ -15,21 +15,32 @@ type metadataResponse struct {
 }
 
 type runtimeMetadata struct {
-	Broker                  string   `json:"broker"`
-	HTTPAddr                string   `json:"http_addr"`
-	TradeStorePath          string   `json:"trade_store_path"`
-	PollSeconds             int      `json:"poll_seconds"`
-	SyncPollSeconds         int      `json:"sync_poll_seconds"`
-	LogLevel                string   `json:"log_level"`
-	DefaultProduct          string   `json:"default_product"`
-	DefaultQuantity         int      `json:"default_quantity"`
-	DefaultMarketProtection *int     `json:"default_market_protection,omitempty"`
-	DefaultStopLossPoints   float64  `json:"default_stop_loss_points"`
-	DefaultTargetPoints     float64  `json:"default_target_points"`
-	DefaultSLLimitOffset    float64  `json:"default_sl_limit_offset"`
-	KiteAPIKeyConfigured    bool     `json:"kite_api_key_configured"`
-	KiteAccessConfigured    bool     `json:"kite_access_configured"`
-	DeferredItems           []string `json:"deferred_items,omitempty"`
+	Broker                  string           `json:"broker"`
+	HTTPAddr                string           `json:"http_addr"`
+	TradeStorePath          string           `json:"trade_store_path"`
+	PollSeconds             int              `json:"poll_seconds"`
+	SyncPollSeconds         int              `json:"sync_poll_seconds"`
+	LogLevel                string           `json:"log_level"`
+	DefaultProduct          string           `json:"default_product"`
+	DefaultQuantity         int              `json:"default_quantity"`
+	DefaultMarketProtection *int             `json:"default_market_protection,omitempty"`
+	DefaultStopLossPoints   float64          `json:"default_stop_loss_points"`
+	DefaultTargetPoints     float64          `json:"default_target_points"`
+	DefaultSLLimitOffset    float64          `json:"default_sl_limit_offset"`
+	SymbolWatchlist         []symbolMetadata `json:"symbol_watchlist,omitempty"`
+	KiteAPIKeyConfigured    bool             `json:"kite_api_key_configured"`
+	KiteAccessConfigured    bool             `json:"kite_access_configured"`
+	DeferredItems           []string         `json:"deferred_items,omitempty"`
+}
+
+type symbolMetadata struct {
+	Exchange        string  `json:"exchange"`
+	TradingSymbol   string  `json:"tradingsymbol"`
+	Product         string  `json:"product"`
+	Name            string  `json:"name,omitempty"`
+	DefaultQuantity int     `json:"default_quantity,omitempty"`
+	LotSize         int     `json:"lot_size,omitempty"`
+	TickSize        float64 `json:"tick_size,omitempty"`
 }
 
 type enumMetadata struct {
@@ -79,6 +90,7 @@ func buildMetadata(cfg config.Config) metadataResponse {
 			DefaultStopLossPoints:   cfg.DefaultStopLossPoints,
 			DefaultTargetPoints:     cfg.DefaultTargetPoints,
 			DefaultSLLimitOffset:    cfg.DefaultSLLimitOffset,
+			SymbolWatchlist:         symbolWatchlistMetadata(cfg.SymbolWatchlist),
 			KiteAPIKeyConfigured:    cfg.KiteAPIKey != "",
 			KiteAccessConfigured:    cfg.AccessToken != "",
 			DeferredItems: []string{
@@ -146,6 +158,25 @@ func buildMetadata(cfg config.Config) metadataResponse {
 		},
 		Endpoints: endpointMap(),
 	}
+}
+
+func symbolWatchlistMetadata(items []config.SymbolWatchItem) []symbolMetadata {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]symbolMetadata, 0, len(items))
+	for _, item := range items {
+		out = append(out, symbolMetadata{
+			Exchange:        item.Exchange,
+			TradingSymbol:   item.TradingSymbol,
+			Product:         item.Product,
+			Name:            item.Name,
+			DefaultQuantity: item.DefaultQuantity,
+			LotSize:         item.LotSize,
+			TickSize:        item.TickSize,
+		})
+	}
+	return out
 }
 
 func brokerName() string {

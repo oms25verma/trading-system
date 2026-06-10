@@ -1,0 +1,20 @@
+{
+  "symbols": [
+    {
+      "exchange": "MCX",
+      "symbol": "SILVERM26JUNFUT",
+      "product": "MIS",
+      "name": "Silver Mini Jun Fut",
+      "default_quantity": 1,
+      "lot_size": 1,
+      "tick_size": 1
+    },
+    {
+      "exchange": "NSE",
+      "symbol": "INFY",
+      "product": "MIS",
+      "name": "Infosys",
+      "default_quantity": 1
+    }
+  ]
+}

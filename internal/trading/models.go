@@ -71,6 +71,7 @@ type KiteOrder struct {
 	AveragePrice    float64   `json:"average_price,omitempty"`
 	Tag             string    `json:"tag,omitempty"`
 	CreationSource  string    `json:"creation_source"`
+	OrderTimestamp  time.Time `json:"order_timestamp,omitempty"`
 	SyncedAt        time.Time `json:"synced_at"`
 }
 

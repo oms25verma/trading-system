@@ -605,6 +605,12 @@ func (m *Manager) Exit(ctx context.Context, id string) (*ManagedTrade, error) {
 		Tag:              LocalSystemOrderTag,
 	})
 	if err != nil {
+		if isAMORequiredError(err) {
+			return nil, conflictError(
+				"market_closed_amo_required",
+				"regular exit order was rejected because the market is closed; the position is still open. Try exiting during market hours, or use an explicit AMO exit flow when you want to queue the square-off for the next session.",
+			)
+		}
 		return nil, err
 	}
 
@@ -1072,7 +1078,12 @@ func (m *Manager) ListSyncedOrders() []*KiteOrder {
 		out = append(out, cloneKiteOrder(order))
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].OrderID < out[j].OrderID
+		left := effectiveOrderTimestamp(out[i])
+		right := effectiveOrderTimestamp(out[j])
+		if !left.Equal(right) {
+			return left.After(right)
+		}
+		return out[i].OrderID > out[j].OrderID
 	})
 	return out
 }
@@ -2439,6 +2450,26 @@ func cloneKiteOrder(order *KiteOrder) *KiteOrder {
 	}
 	copy := *order
 	return &copy
+}
+
+func effectiveOrderTimestamp(order *KiteOrder) time.Time {
+	if order == nil {
+		return time.Time{}
+	}
+	if !order.OrderTimestamp.IsZero() {
+		return order.OrderTimestamp
+	}
+	return order.SyncedAt
+}
+
+func isAMORequiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "switch_to_amo") ||
+		strings.Contains(message, "after market order") ||
+		strings.Contains(message, "amo")
 }
 
 func cloneKitePosition(position *KitePosition) *KitePosition {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,6 +15,9 @@ type Config struct {
 	KiteAPISecret           string
 	AccessToken             string
 	TradeStorePath          string
+	SymbolWatchlist         []SymbolWatchItem
+	SymbolWatchlistFile     string
+	symbolWatchlistErr      error
 	PollInterval            time.Duration
 	SyncPollInterval        time.Duration
 	DefaultProduct          string
@@ -23,6 +27,16 @@ type Config struct {
 	DefaultTargetPoints     float64
 	DefaultSLLimitOffset    float64
 	LogLevel                string
+}
+
+type SymbolWatchItem struct {
+	Exchange        string  `json:"exchange"`
+	TradingSymbol   string  `json:"tradingsymbol"`
+	Product         string  `json:"product"`
+	Name            string  `json:"name,omitempty"`
+	DefaultQuantity int     `json:"default_quantity,omitempty"`
+	LotSize         int     `json:"lot_size,omitempty"`
+	TickSize        float64 `json:"tick_size,omitempty"`
 }
 
 func Load() Config {
@@ -53,6 +67,8 @@ func Load() Config {
 	if defaultProduct == "" {
 		defaultProduct = "MIS"
 	}
+	symbolWatchlistFile := os.Getenv("SYMBOL_WATCHLIST_FILE")
+	symbolWatchlist, symbolWatchlistErr := loadSymbolWatchlist(symbolWatchlistFile, os.Getenv("SYMBOL_WATCHLIST"), defaultProduct)
 
 	return Config{
 		Addr:                    addr,
@@ -60,6 +76,9 @@ func Load() Config {
 		KiteAPISecret:           os.Getenv("KITE_API_SECRET"),
 		AccessToken:             os.Getenv("KITE_ACCESS_TOKEN"),
 		TradeStorePath:          tradeStorePath,
+		SymbolWatchlist:         symbolWatchlist,
+		SymbolWatchlistFile:     symbolWatchlistFile,
+		symbolWatchlistErr:      symbolWatchlistErr,
 		PollInterval:            time.Duration(pollSeconds) * time.Second,
 		SyncPollInterval:        time.Duration(syncPollSeconds) * time.Second,
 		DefaultProduct:          defaultProduct,
@@ -70,6 +89,129 @@ func Load() Config {
 		DefaultSLLimitOffset:    floatEnv("DEFAULT_SL_LIMIT_OFFSET", 0),
 		LogLevel:                stringEnv("LOG_LEVEL", "info"),
 	}
+}
+
+func loadSymbolWatchlist(filePath, raw, defaultProduct string) ([]SymbolWatchItem, error) {
+	if strings.TrimSpace(filePath) != "" {
+		items, err := parseSymbolWatchlistFile(filePath, defaultProduct)
+		if err != nil {
+			return nil, err
+		}
+		return items, nil
+	}
+	return parseSymbolWatchlist(raw, defaultProduct), nil
+}
+
+type symbolWatchlistFile struct {
+	Symbols []rawSymbolWatchItem `json:"symbols"`
+}
+
+type rawSymbolWatchItem struct {
+	Exchange        string   `json:"exchange"`
+	TradingSymbol   string   `json:"tradingsymbol"`
+	Symbol          string   `json:"symbol"`
+	Product         string   `json:"product"`
+	Name            string   `json:"name"`
+	DefaultQuantity int      `json:"default_quantity"`
+	LotSize         int      `json:"lot_size"`
+	TickSize        float64  `json:"tick_size"`
+	Enabled         *bool    `json:"enabled"`
+	Products        []string `json:"products"`
+}
+
+func parseSymbolWatchlistFile(path, defaultProduct string) ([]SymbolWatchItem, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read SYMBOL_WATCHLIST_FILE: %w", err)
+	}
+	var rawItems []rawSymbolWatchItem
+	if err := json.Unmarshal(payload, &rawItems); err != nil {
+		var file symbolWatchlistFile
+		if nestedErr := json.Unmarshal(payload, &file); nestedErr != nil {
+			return nil, fmt.Errorf("parse SYMBOL_WATCHLIST_FILE: %w", err)
+		}
+		rawItems = file.Symbols
+	}
+	return normalizeSymbolWatchlist(rawItems, defaultProduct), nil
+}
+
+func parseSymbolWatchlist(raw, defaultProduct string) []SymbolWatchItem {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	rawItems := make([]rawSymbolWatchItem, 0)
+	for _, token := range strings.Split(raw, ",") {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		parts := strings.Split(token, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		product := defaultProduct
+		if len(parts) >= 3 && strings.TrimSpace(parts[2]) != "" {
+			product = strings.TrimSpace(parts[2])
+		}
+		rawItems = append(rawItems, rawSymbolWatchItem{
+			Exchange:      parts[0],
+			TradingSymbol: parts[1],
+			Product:       product,
+		})
+	}
+	return normalizeSymbolWatchlist(rawItems, defaultProduct)
+}
+
+func normalizeSymbolWatchlist(rawItems []rawSymbolWatchItem, defaultProduct string) []SymbolWatchItem {
+	items := make([]SymbolWatchItem, 0, len(rawItems))
+	for _, raw := range rawItems {
+		if raw.Enabled != nil && !*raw.Enabled {
+			continue
+		}
+		symbol := strings.TrimSpace(raw.TradingSymbol)
+		if symbol == "" {
+			symbol = strings.TrimSpace(raw.Symbol)
+		}
+		if strings.TrimSpace(raw.Exchange) == "" || symbol == "" {
+			continue
+		}
+		products := raw.Products
+		if len(products) == 0 {
+			product := strings.TrimSpace(raw.Product)
+			if product == "" {
+				product = defaultProduct
+			}
+			products = []string{product}
+		}
+		for _, product := range products {
+			product = strings.TrimSpace(product)
+			if product == "" {
+				product = defaultProduct
+			}
+			defaultQuantity := raw.DefaultQuantity
+			if defaultQuantity < 0 {
+				defaultQuantity = 0
+			}
+			lotSize := raw.LotSize
+			if lotSize < 0 {
+				lotSize = 0
+			}
+			tickSize := raw.TickSize
+			if tickSize < 0 {
+				tickSize = 0
+			}
+			items = append(items, SymbolWatchItem{
+				Exchange:        strings.ToUpper(strings.TrimSpace(raw.Exchange)),
+				TradingSymbol:   strings.ToUpper(symbol),
+				Product:         strings.ToUpper(product),
+				Name:            strings.TrimSpace(raw.Name),
+				DefaultQuantity: defaultQuantity,
+				LotSize:         lotSize,
+				TickSize:        tickSize,
+			})
+		}
+	}
+	return items
 }
 
 func stringEnv(key, fallback string) string {
@@ -92,6 +234,9 @@ func (c Config) Validate(broker string) error {
 	}
 	if c.TradeStorePath == "" {
 		return fmt.Errorf("TRADE_STORE_PATH is required")
+	}
+	if c.symbolWatchlistErr != nil {
+		return c.symbolWatchlistErr
 	}
 	if c.DefaultProduct == "" {
 		return fmt.Errorf("DEFAULT_PRODUCT is required")

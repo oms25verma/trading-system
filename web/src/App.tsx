@@ -35,6 +35,7 @@ import type {
 } from './types';
 
 type View = 'dashboard' | 'groups' | 'orders' | 'trades' | 'conflicts';
+type SelectOption = string | { value: string; label: string };
 type Action =
   | { type: 'create-trade' }
   | { type: 'stop-loss'; trade?: ManagedTrade; group?: PositionGroup }
@@ -280,6 +281,8 @@ function GroupsView(props: {
 }
 
 function OrdersView(props: { orders: KiteOrder[]; onCancel: (order: KiteOrder) => void }) {
+  const orders = useMemo(() => [...props.orders].sort((left, right) => orderMillis(right) - orderMillis(left)), [props.orders]);
+
   return (
     <section className="table-section">
       <PanelTitle icon={<ListChecks />} title="Orderbook" />
@@ -287,26 +290,32 @@ function OrdersView(props: { orders: KiteOrder[]; onCancel: (order: KiteOrder) =
         <table>
           <thead>
             <tr>
+              <th>Time</th>
               <th>Order</th>
               <th>Symbol</th>
               <th>Side</th>
               <th>Qty</th>
               <th>Type</th>
-              <th>Price</th>
+              <th>Trigger</th>
+              <th>Order Price</th>
+              <th>Avg Price</th>
               <th>Status</th>
               <th>Source</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {props.orders.map((order) => (
+            {orders.map((order) => (
               <tr key={order.order_id}>
+                <td>{formatOrderTime(order)}</td>
                 <td className="mono">{order.order_id}</td>
                 <td>{order.exchange}:{order.tradingsymbol}</td>
                 <td><SidePill side={order.transaction_type} /></td>
                 <td>{order.quantity}</td>
                 <td>{order.order_type}</td>
-                <td>{money(order.price || order.trigger_price)}</td>
+                <td>{money(order.trigger_price)}</td>
+                <td>{money(order.price)}</td>
+                <td>{money(order.average_price)}</td>
                 <td><OrderStatusPill status={order.status} /></td>
                 <td>{order.creation_source}</td>
                 <td className="row-actions">
@@ -501,12 +510,15 @@ function ActionPanel(props: {
 
 function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn: () => Promise<unknown>) => Promise<void> }) {
   const defaults = props.metadata?.runtime;
+  const watchlist = defaults?.symbol_watchlist ?? [];
+  const firstSymbol = watchlist[0];
+  const [selectedSymbol, setSelectedSymbol] = useState(firstSymbol ? symbolKey(firstSymbol) : '');
   const [form, setForm] = useState<CreateTradeRequest>({
-    exchange: 'NSE',
-    tradingsymbol: '',
+    exchange: firstSymbol?.exchange ?? 'NSE',
+    tradingsymbol: firstSymbol?.tradingsymbol ?? '',
     side: 'BUY',
-    quantity: defaults?.default_quantity ?? 1,
-    product: defaults?.default_product ?? 'MIS',
+    quantity: firstSymbol?.default_quantity || defaults?.default_quantity || 1,
+    product: firstSymbol?.product ?? defaults?.default_product ?? 'MIS',
     order_type: 'MARKET',
     market_protection: defaults?.default_market_protection,
     protection: {
@@ -524,13 +536,44 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     return props.onRun('Created trade', () => api.createTrade(body));
   }
 
+  function selectSymbol(value: string) {
+    setSelectedSymbol(value);
+    const item = watchlist.find((symbol) => symbolKey(symbol) === value);
+    if (!item) return;
+    setForm({
+      ...form,
+      exchange: item.exchange,
+      tradingsymbol: item.tradingsymbol,
+      product: item.product,
+      quantity: item.default_quantity || form.quantity,
+    });
+  }
+
   return (
     <FormShell onSubmit={submit}>
-      <Input label="Exchange" value={form.exchange} onChange={(exchange) => setForm({ ...form, exchange: exchange.toUpperCase() })} />
-      <Input label="Symbol" value={form.tradingsymbol} onChange={(tradingsymbol) => setForm({ ...form, tradingsymbol })} />
+      {watchlist.length > 0 ? (
+        <Select
+          label="Symbol"
+          value={selectedSymbol}
+          options={watchlist.map((symbol) => ({ value: symbolKey(symbol), label: symbolLabel(symbol) }))}
+          onChange={selectSymbol}
+        />
+      ) : (
+        <>
+          <Input label="Exchange" value={form.exchange} onChange={(exchange) => setForm({ ...form, exchange: exchange.toUpperCase() })} />
+          <Input label="Symbol" value={form.tradingsymbol} onChange={(tradingsymbol) => setForm({ ...form, tradingsymbol })} />
+        </>
+      )}
       <Segmented label="Side" value={form.side} options={['BUY', 'SELL']} onChange={(side) => setForm({ ...form, side: side as Side })} />
       <Input label="Quantity" type="number" value={form.quantity} onChange={(quantity) => setForm({ ...form, quantity: Number(quantity) })} />
-      <Select label="Product" value={form.product} options={props.metadata?.enums.products ?? ['MIS', 'NRML']} onChange={(product) => setForm({ ...form, product })} />
+      {watchlist.length > 0 ? (
+        <div className="selected-box">
+          <strong>{form.exchange}:{form.tradingsymbol}</strong>
+          <span>{form.product}</span>
+        </div>
+      ) : (
+        <Select label="Product" value={form.product} options={props.metadata?.enums.products ?? ['MIS', 'NRML']} onChange={(product) => setForm({ ...form, product })} />
+      )}
       <Select label="Order Type" value={form.order_type} options={['MARKET', 'LIMIT']} onChange={(order_type) => setForm({ ...form, order_type })} />
       {form.order_type === 'LIMIT' && <Input label="Limit Price" type="number" value={form.price ?? ''} onChange={(price) => setForm({ ...form, price: Number(price) })} />}
       <label className="check-row">
@@ -539,10 +582,11 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       </label>
       {withProtection && (
         <div className="form-grid two">
-          <Input label="SL Points" type="number" value={form.protection?.stop_loss_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, stop_loss_points: Number(value) } })} />
-          <Input label="Target Points" type="number" value={form.protection?.target_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, target_points: Number(value) } })} />
-          <Input label="SL Offset" type="number" value={form.protection?.sl_limit_offset ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, sl_limit_offset: Number(value) } })} />
-          <Input label="Trail By" type="number" value={form.protection?.trail_by ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, trail_by: Number(value) } })} />
+          <Input label="Reference Price" type="number" value={form.protection?.reference_price ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, reference_price: optionalNumber(value) } })} />
+          <Input label="SL Points" type="number" value={form.protection?.stop_loss_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, stop_loss_points: optionalNumber(value) } })} />
+          <Input label="Target Points" type="number" value={form.protection?.target_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, target_points: optionalNumber(value) } })} />
+          <Input label="SL Offset" type="number" value={form.protection?.sl_limit_offset ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, sl_limit_offset: optionalNumber(value) } })} />
+          <Input label="Trail By" type="number" value={form.protection?.trail_by ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, trail_by: optionalNumber(value) } })} />
         </div>
       )}
       <button className="icon-text-button primary form-submit" type="submit"><Plus /> Create</button>
@@ -637,12 +681,16 @@ function Input(props: { label: string; value: string | number; type?: string; on
   );
 }
 
-function Select(props: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+function Select(props: { label: string; value: string; options: SelectOption[]; onChange: (value: string) => void }) {
   return (
     <label className="field">
       <span>{props.label}</span>
       <select value={props.value} onChange={(event) => props.onChange(event.target.value)}>
-        {props.options.map((option) => <option key={option} value={option}>{option}</option>)}
+        {props.options.map((option) => {
+          const value = typeof option === 'string' ? option : option.value;
+          const label = typeof option === 'string' ? option : option.label;
+          return <option key={value} value={value}>{label}</option>;
+        })}
       </select>
     </label>
   );
@@ -719,11 +767,12 @@ function WarningList(props: { warnings?: Record<string, number> }) {
 
 function MiniOrderList(props: { orders: KiteOrder[] }) {
   if (!props.orders.length) return <EmptyState label="No open orders" compact />;
+  const orders = [...props.orders].sort((left, right) => orderMillis(right) - orderMillis(left));
   return (
     <div className="mini-list">
-      {props.orders.map((order) => (
+      {orders.map((order) => (
         <div className="mini-row" key={order.order_id}>
-          <span><strong>{order.tradingsymbol}</strong><small>{order.order_type} · {order.product}</small></span>
+          <span><strong>{order.tradingsymbol}</strong><small>{formatOrderTime(order)} · {order.order_type} · {order.product}</small></span>
           <SidePill side={order.transaction_type} />
         </div>
       ))}
@@ -766,6 +815,39 @@ function titleFor(view: View) {
     case 'conflicts': return 'Needs Attention';
     default: return 'Dashboard';
   }
+}
+
+function symbolKey(symbol: { exchange: string; tradingsymbol: string; product: string }) {
+  return `${symbol.exchange}:${symbol.tradingsymbol}:${symbol.product}`;
+}
+
+function symbolLabel(symbol: { exchange: string; tradingsymbol: string; product: string; name?: string }) {
+  const instrument = `${symbol.exchange}:${symbol.tradingsymbol}`;
+  return symbol.name ? `${symbol.name} · ${instrument} · ${symbol.product}` : `${instrument} · ${symbol.product}`;
+}
+
+function optionalNumber(value: string) {
+  return value === '' ? undefined : Number(value);
+}
+
+function orderMillis(order: KiteOrder) {
+  const value = order.order_timestamp || order.synced_at;
+  const millis = Date.parse(value);
+  return Number.isNaN(millis) ? 0 : millis;
+}
+
+function formatOrderTime(order: KiteOrder) {
+  const value = order.order_timestamp || order.synced_at;
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function money(value?: number) {

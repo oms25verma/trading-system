@@ -33,6 +33,38 @@ curl http://localhost:8080/metadata
 curl http://localhost:8080/openapi.json
 ```
 
+To restrict frontend order entry to specific instruments, prefer a JSON watchlist file:
+
+```bash
+export SYMBOL_WATCHLIST_FILE=config/symbols.json
+```
+
+Example:
+
+```json
+{
+  "symbols": [
+    {
+      "exchange": "MCX",
+      "symbol": "SILVERM26JUNFUT",
+      "product": "MIS",
+      "name": "Silver Mini Jun Fut",
+      "default_quantity": 1,
+      "lot_size": 1,
+      "tick_size": 1
+    }
+  ]
+}
+```
+
+You can also use `"products": ["MIS", "NRML"]` to show the same instrument for multiple products, or `"enabled": false` to keep expired contracts in the file without showing them. The older quick env format still works when `SYMBOL_WATCHLIST_FILE` is empty:
+
+```bash
+export SYMBOL_WATCHLIST=NSE:INFY:MIS,MCX:SILVERM26JUNFUT:MIS
+```
+
+Keep futures symbols updated as contracts expire.
+
 Trades, synced orderbook snapshots, and synced position snapshots are persisted date-wise by default, for example `data/trades_24_05_2026.json`, `data/orders_24_05_2026.json`, and `data/positions_24_05_2026.json`, so local trade ids and the latest sync survive server restarts on the same trading day. Override the directory or exact trade file with:
 
 ```bash

@@ -82,6 +82,7 @@ export interface KiteOrder {
   average_price?: number;
   tag?: string;
   creation_source: string;
+  order_timestamp?: string;
   synced_at: string;
 }
 
@@ -128,6 +129,15 @@ export interface Metadata {
     default_stop_loss_points: number;
     default_target_points: number;
     default_sl_limit_offset: number;
+    symbol_watchlist?: Array<{
+      exchange: string;
+      tradingsymbol: string;
+      product: string;
+      name?: string;
+      default_quantity?: number;
+      lot_size?: number;
+      tick_size?: number;
+    }>;
     kite_api_key_configured: boolean;
     kite_access_configured: boolean;
     deferred_items?: string[];

@@ -109,6 +109,7 @@ func TestMetadataRouteReturnsRuntimeDefaultsAndEnums(t *testing.T) {
 	cfg := config.Config{
 		Addr:                    ":9090",
 		TradeStorePath:          "data",
+		SymbolWatchlist:         []config.SymbolWatchItem{{Exchange: "NSE", TradingSymbol: "INFY", Product: "MIS"}},
 		DefaultProduct:          "MIS",
 		DefaultQuantity:         2,
 		DefaultMarketProtection: intPtr(5),
@@ -132,6 +133,9 @@ func TestMetadataRouteReturnsRuntimeDefaultsAndEnums(t *testing.T) {
 	}
 	if metadata.Runtime.DefaultQuantity != 2 || metadata.Runtime.DefaultMarketProtection == nil || *metadata.Runtime.DefaultMarketProtection != 5 {
 		t.Fatalf("unexpected runtime defaults: %+v", metadata.Runtime)
+	}
+	if len(metadata.Runtime.SymbolWatchlist) != 1 || metadata.Runtime.SymbolWatchlist[0].TradingSymbol != "INFY" {
+		t.Fatalf("expected symbol watchlist in metadata, got %+v", metadata.Runtime.SymbolWatchlist)
 	}
 	if len(metadata.Enums.Sides) == 0 || len(metadata.Endpoints["/trades"]) == 0 {
 		t.Fatalf("expected enums and endpoints, got %+v", metadata)

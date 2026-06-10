@@ -39,7 +39,7 @@ GET /metadata
 GET /openapi.json
 ```
 
-`/metadata` returns frontend bootstrap data: safe runtime defaults, enums, endpoint list, and feature capabilities. Sensitive values such as Kite secrets and access tokens are never returned.
+`/metadata` returns frontend bootstrap data: safe runtime defaults, enums, endpoint list, and feature capabilities. Sensitive values such as Kite secrets and access tokens are never returned. If `SYMBOL_WATCHLIST_FILE` or `SYMBOL_WATCHLIST` is configured, metadata includes `runtime.symbol_watchlist` for the frontend order-entry dropdown. The file-based watchlist is recommended because it supports display names, symbol-level default quantity, lot size, tick size, multiple products, and disabled/expired symbols.
 
 `/openapi.json` returns a starter OpenAPI 3 path map for frontend tooling and API discovery.
 
@@ -147,6 +147,8 @@ TSLOCAL   -> LOCAL_SYSTEM
 empty tag -> KITE_APP
 other tag -> UNKNOWN
 ```
+
+`UNKNOWN` means Kite returned a non-empty order `tag` that is not this service's `TSLOCAL` tag. This usually represents another system/app or an older/custom-tagged order.
 
 List endpoints support paged mode when any query parameter is supplied. Useful filters for orders:
 
