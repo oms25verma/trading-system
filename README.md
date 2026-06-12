@@ -327,6 +327,8 @@ In the frontend this is shown as `Est. Entry Price` for `MARKET` orders. It is t
 
 For `LIMIT` orders, the limit price itself is used as the risk basis. The frontend hides the extra estimated-entry input in that case so the preview follows the editable limit price.
 
+For option premiums, the frontend adapts suggested SL/target points to the entry basis. This prevents low-premium contracts, such as an option trading near `25`, from getting a default `20` point SL that would create a negative stop price.
+
 ```bash
 curl -X POST http://localhost:8080/trades \
   -H 'Content-Type: application/json' \

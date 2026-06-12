@@ -52,6 +52,11 @@ type RiskPreviewData = {
   rewardAmount: number;
   riskReward: number;
 };
+type ProtectionDefaults = {
+  stop_loss_points?: number;
+  target_points?: number;
+  sl_limit_offset?: number;
+};
 type Action =
   | { type: 'create-trade' }
   | { type: 'stop-loss'; trade?: ManagedTrade; group?: PositionGroup }
@@ -779,6 +784,8 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   const [underlyingQuoteError, setUnderlyingQuoteError] = useState('');
   const effectiveWithProtection = withProtection || !!defaults?.require_order_protection;
   const protectionPreview = riskPreview(form, effectiveWithProtection);
+  const entryBasis = entryBasisPrice(form);
+  const protectionPresets = protectionPresetOptions(entryBasis);
 
   useEffect(() => {
     void loadOptionUnderlyings(optionExchange, false);
@@ -805,7 +812,10 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     return props.onRun('Created trade', () => api.createTrade(body));
   }
 
-  function defaultProtection() {
+  function defaultProtection(entryPrice?: number): ProtectionDefaults {
+    if (entryPrice && entryPrice > 0) {
+      return adaptiveProtection(entryPrice, defaults);
+    }
     return {
       stop_loss_points: defaults?.default_stop_loss_points || undefined,
       target_points: defaults?.default_target_points || undefined,
@@ -962,6 +972,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   }
 
   function applyProtectionPreset(stopLossPoints: number, targetPoints: number) {
+    if (stopLossPoints <= 0 || targetPoints <= 0) return;
     setForm({
       ...form,
       protection: {
@@ -985,6 +996,18 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     }
   }
 
+  function changeLimitPrice(value: string) {
+    const price = Number(value);
+    setForm((current) => ({
+      ...current,
+      price,
+      protection: {
+        ...current.protection,
+        ...mergeAdaptiveProtection(current.protection, price, defaults),
+      },
+    }));
+  }
+
   async function fetchEntryLTP(exchange = form.exchange, symbol = form.tradingsymbol, updateLimitPrice = false) {
     if (!exchange || !symbol) return;
     setLTPLoading(true);
@@ -997,6 +1020,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         protection: {
           ...current.protection,
           reference_price: result.last_price,
+          ...mergeAdaptiveProtection(current.protection, result.last_price, defaults),
         },
       }));
     } catch (err) {
@@ -1055,7 +1079,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       <Select label="Order Type" value={form.order_type} options={['MARKET', 'LIMIT']} onChange={changeOrderType} />
       {form.order_type === 'LIMIT' && (
         <div className="input-action-row">
-          <Input label="Limit Price" type="number" min={0} step="0.05" value={form.price ?? ''} onChange={(price) => setForm({ ...form, price: Number(price) })} />
+          <Input label="Limit Price" type="number" min={0} step="0.05" value={form.price ?? ''} onChange={changeLimitPrice} />
           <button type="button" className="text-button" onClick={() => void useLTP()} disabled={ltpLoading || !form.exchange || !form.tradingsymbol}>
             {ltpLoading ? 'Loading' : 'Use LTP'}
           </button>
@@ -1068,9 +1092,9 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       {effectiveWithProtection && (
         <>
           <div className="preset-row">
-            <button type="button" onClick={() => applyProtectionPreset(20, 40)}>20 / 40</button>
-            <button type="button" onClick={() => applyProtectionPreset(30, 60)}>30 / 60</button>
-            <button type="button" onClick={() => applyProtectionPreset(50, 100)}>50 / 100</button>
+            {protectionPresets.map((preset) => (
+              <button type="button" key={preset.label} onClick={() => applyProtectionPreset(preset.stopLoss, preset.target)}>{preset.label}</button>
+            ))}
           </div>
           {form.order_type === 'LIMIT' ? (
             <div className="selected-box compact">
@@ -1613,10 +1637,72 @@ function validateCreateTradeForm(body: CreateTradeRequest, withProtection: boole
   return '';
 }
 
+function entryBasisPrice(body: CreateTradeRequest) {
+  if (body.order_type === 'LIMIT') return body.price || 0;
+  return body.protection?.reference_price || body.price || 0;
+}
+
+function adaptiveProtection(entryPrice: number, defaults?: Metadata['runtime']): ProtectionDefaults {
+  const stopLoss = roundToTick(Math.max(0.05, entryPrice * 0.20));
+  const target = roundToTick(Math.max(0.10, entryPrice * 0.40));
+  const maxOffset = Math.max(0, entryPrice - stopLoss - 0.05);
+  const configuredOffset = defaults?.default_sl_limit_offset ?? 0;
+  return {
+    stop_loss_points: stopLoss || defaults?.default_stop_loss_points || undefined,
+    target_points: target || defaults?.default_target_points || undefined,
+    sl_limit_offset: roundToTick(Math.min(configuredOffset, maxOffset)),
+  };
+}
+
+function mergeAdaptiveProtection(current: CreateTradeRequest['protection'], entryPrice: number, defaults?: Metadata['runtime']) {
+  const adaptive = adaptiveProtection(entryPrice, defaults);
+  const shouldReplaceStop = !current?.stop_loss_points || !safeStopForBuy(entryPrice, current.stop_loss_points, current.sl_limit_offset ?? 0);
+  const shouldReplaceTarget = !current?.target_points;
+  const shouldReplaceOffset = !safeStopForBuy(entryPrice, shouldReplaceStop ? adaptive.stop_loss_points ?? 0 : current?.stop_loss_points ?? 0, current?.sl_limit_offset ?? 0);
+  return {
+    stop_loss_points: shouldReplaceStop ? adaptive.stop_loss_points : current?.stop_loss_points,
+    target_points: shouldReplaceTarget ? adaptive.target_points : current?.target_points,
+    sl_limit_offset: shouldReplaceOffset ? adaptive.sl_limit_offset : current?.sl_limit_offset,
+  };
+}
+
+function protectionPresetOptions(entryPrice: number) {
+  if (entryPrice > 0) {
+    return [
+      percentPreset(entryPrice, 0.10, 0.20),
+      percentPreset(entryPrice, 0.20, 0.40),
+      percentPreset(entryPrice, 0.30, 0.60),
+    ];
+  }
+  return [
+    { label: '10% / 20%', stopLoss: 0, target: 0 },
+    { label: '20% / 40%', stopLoss: 0, target: 0 },
+    { label: '30% / 60%', stopLoss: 0, target: 0 },
+  ];
+}
+
+function percentPreset(entryPrice: number, stopLossPercent: number, targetPercent: number) {
+  const stopLoss = roundToTick(Math.max(0.05, entryPrice * stopLossPercent));
+  const target = roundToTick(Math.max(0.10, entryPrice * targetPercent));
+  return {
+    label: `${money(stopLoss)} / ${money(target)}`,
+    stopLoss,
+    target,
+  };
+}
+
+function safeStopForBuy(entryPrice: number, stopLossPoints: number, slOffset: number) {
+  return entryPrice <= 0 || stopLossPoints <= 0 || entryPrice - stopLossPoints - slOffset > 0;
+}
+
+function roundToTick(value: number) {
+  return Math.round(value * 20) / 20;
+}
+
 function riskPreview(body: CreateTradeRequest, withProtection: boolean): RiskPreviewData | undefined {
   const protection = body.protection;
   if (!withProtection || !protection) return undefined;
-  const referencePrice = body.order_type === 'LIMIT' ? body.price || 0 : protection.reference_price || body.price || 0;
+  const referencePrice = entryBasisPrice(body);
   const stopLossPoints = protection.stop_loss_points ?? 0;
   const targetPoints = protection.target_points ?? 0;
   if (referencePrice <= 0 || stopLossPoints <= 0 || targetPoints <= 0 || body.quantity <= 0) return undefined;
