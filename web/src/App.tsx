@@ -26,6 +26,7 @@ import { ApiError, api } from './api';
 import type {
   CreateTradeRequest,
   DashboardSummary,
+  FutureContract,
   KiteOrder,
   KitePosition,
   LTPResponse,
@@ -40,6 +41,7 @@ import type {
 
 type View = 'dashboard' | 'groups' | 'orders' | 'trades' | 'conflicts';
 type PositionTab = 'active' | 'closed' | 'unmanaged' | 'conflicts';
+type InstrumentMode = 'NFO_OPTIONS' | 'BFO_OPTIONS' | 'MCX_FUTURES';
 type SelectOption = string | { value: string; label: string };
 type TableState = { page: number; pageSize: number; status: string; symbol: string };
 type PageResult<T> = { items: T[]; page: number; totalPages: number; total: number };
@@ -51,12 +53,17 @@ type RiskPreviewData = {
   riskAmount: number;
   rewardAmount: number;
   riskReward: number;
+  pnlMultiplier: number;
 };
 type ProtectionDefaults = {
   stop_loss_points?: number;
   target_points?: number;
   sl_limit_offset?: number;
 };
+type ProtectionPresetProfile = {
+  stopLossPercent: number;
+  targetPercent: number;
+}[];
 type Action =
   | { type: 'create-trade' }
   | { type: 'stop-loss'; trade?: ManagedTrade; group?: PositionGroup }
@@ -85,6 +92,31 @@ const emptySnapshot: Snapshot = {
 
 const MARKET_REFRESH_MS = 5000;
 const DEFAULT_OPTION_RANGE_POINTS = 1000;
+const DEFAULT_TICK_SIZE = 0.05;
+const MCX_DEFAULT_TICK_SIZE = 1;
+const MCX_PNL_MULTIPLIERS: Record<string, number> = {
+  ALUMINIUM: 5000,
+  ALUMINI: 1000,
+  COPPER: 2500,
+  LEAD: 5000,
+  LEADMINI: 1000,
+  NICKEL: 1500,
+  ZINC: 5000,
+  ZINCMINI: 1000,
+  GOLD: 100,
+  GOLDM: 10,
+  GOLDPETAL: 1,
+  GOLDGUINEA: 1,
+  GOLDTEN: 1,
+  SILVER: 30,
+  SILVERM: 5,
+  SILVERMIC: 1,
+  SILVER100: 0.1,
+  CRUDEOIL: 100,
+  CRUDEOILM: 10,
+  NATURALGAS: 1250,
+  NATGASMINI: 250,
+};
 
 export function App() {
   const [view, setView] = useState<View>('dashboard');
@@ -767,6 +799,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   });
   const [withProtection, setWithProtection] = useState(true);
   const [formError, setFormError] = useState('');
+  const [instrumentMode, setInstrumentMode] = useState<InstrumentMode>('NFO_OPTIONS');
   const [optionExchange, setOptionExchange] = useState('NFO');
   const [underlyings, setUnderlyings] = useState<string[]>([]);
   const [underlying, setUnderlying] = useState('NIFTY');
@@ -776,17 +809,28 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   const [contractsEachSide, setContractsEachSide] = useState(10);
   const [options, setOptions] = useState<OptionContract[]>([]);
   const [selectedOption, setSelectedOption] = useState('');
+  const [futureUnderlyings, setFutureUnderlyings] = useState<string[]>([]);
+  const [futureUnderlying, setFutureUnderlying] = useState('SILVERM');
+  const [futures, setFutures] = useState<FutureContract[]>([]);
+  const [selectedFuture, setSelectedFuture] = useState('');
+  const [futureStatus, setFutureStatus] = useState('');
+  const [futureLoading, setFutureLoading] = useState(false);
   const [selectedLotSize, setSelectedLotSize] = useState(0);
+  const [selectedTickSize, setSelectedTickSize] = useState(DEFAULT_TICK_SIZE);
+  const [selectedPnlMultiplier, setSelectedPnlMultiplier] = useState(1);
   const [optionStatus, setOptionStatus] = useState('');
   const [optionLoading, setOptionLoading] = useState(false);
   const [ltpLoading, setLTPLoading] = useState(false);
   const [underlyingQuote, setUnderlyingQuote] = useState<LTPResponse | null>(null);
   const [underlyingQuoteError, setUnderlyingQuoteError] = useState('');
   const effectiveWithProtection = withProtection || !!defaults?.require_order_protection;
-  const protectionPreview = riskPreview(form, effectiveWithProtection);
+  const protectionPreview = riskPreview(form, effectiveWithProtection, selectedPnlMultiplier);
   const entryBasis = entryBasisPrice(form);
-  const protectionPresets = protectionPresetOptions(entryBasis);
+  const activeTickSize = selectedTickSize || defaultTickSizeForMode(instrumentMode);
+  const protectionPresets = protectionPresetOptions(entryBasis, instrumentMode, activeTickSize);
   const createDisabledReason = createTradeDisabledReason(form, effectiveWithProtection, selectedLotSize);
+  const isOptionsMode = instrumentMode === 'NFO_OPTIONS' || instrumentMode === 'BFO_OPTIONS';
+  const isFuturesMode = instrumentMode === 'MCX_FUTURES';
 
   useEffect(() => {
     void loadOptionUnderlyings(optionExchange, false);
@@ -799,6 +843,10 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   useEffect(() => {
     if (underlying) void loadUnderlyingQuote();
   }, [optionExchange, underlying]);
+
+  useEffect(() => {
+    void loadFutureUnderlyings(false);
+  }, []);
 
   function submit() {
     const body = { ...form, tradingsymbol: form.tradingsymbol.trim().toUpperCase() };
@@ -813,9 +861,9 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     return props.onRun('Created trade', () => api.createTrade(body));
   }
 
-  function defaultProtection(entryPrice?: number): ProtectionDefaults {
+  function defaultProtection(entryPrice?: number, mode = instrumentMode, tickSize = activeTickSize): ProtectionDefaults {
     if (entryPrice && entryPrice > 0) {
-      return adaptiveProtection(entryPrice, defaults);
+      return adaptiveProtection(entryPrice, defaults, mode, tickSize);
     }
     return {
       stop_loss_points: defaults?.default_stop_loss_points || undefined,
@@ -828,6 +876,8 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     setOptions([]);
     setSelectedOption('');
     setSelectedLotSize(0);
+    setSelectedTickSize(DEFAULT_TICK_SIZE);
+    setSelectedPnlMultiplier(1);
     setFormError('');
     setOptionStatus('');
     setForm((current) => ({
@@ -843,14 +893,57 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     }));
   }
 
+  function resetFutureSelection(resetForm = false) {
+    setFutures([]);
+    setSelectedFuture('');
+    setFutureStatus('');
+    setFormError('');
+    if (resetForm) {
+      setSelectedLotSize(0);
+      setSelectedTickSize(MCX_DEFAULT_TICK_SIZE);
+      setSelectedPnlMultiplier(1);
+      setForm((current) => ({
+        ...current,
+        exchange: 'MCX',
+        tradingsymbol: '',
+        quantity: defaults?.default_quantity || 1,
+        product: defaults?.default_product ?? 'MIS',
+        order_type: 'MARKET',
+        price: undefined,
+        market_protection: defaults?.default_market_protection,
+        protection: defaultProtection(undefined, 'MCX_FUTURES', MCX_DEFAULT_TICK_SIZE),
+      }));
+    }
+  }
+
+  function changeInstrumentMode(value: string) {
+    const mode = value as InstrumentMode;
+    setInstrumentMode(mode);
+    if (mode === 'NFO_OPTIONS' || mode === 'BFO_OPTIONS') {
+      const exchange = mode === 'BFO_OPTIONS' ? 'BFO' : 'NFO';
+      setOptionExchange(exchange);
+      resetFutureSelection(false);
+      resetOptionSelection(exchange);
+      return;
+    }
+    setOptions([]);
+    setSelectedOption('');
+    setOptionStatus('');
+    setUnderlyingQuote(null);
+    setUnderlyingQuoteError('');
+    resetFutureSelection(true);
+  }
+
   function changeOptionExchange(value: string) {
-    setOptionExchange(value);
+    const exchange = value === 'BFO' ? 'BFO' : 'NFO';
+    setInstrumentMode(exchange === 'BFO' ? 'BFO_OPTIONS' : 'NFO_OPTIONS');
+    setOptionExchange(exchange);
     setUnderlyingQuote(null);
     setUnderlyingQuoteError('');
     setUnderlyings([]);
     setExpiries([]);
     setExpiry('');
-    resetOptionSelection(value);
+    resetOptionSelection(exchange);
   }
 
   function changeUnderlying(value: string) {
@@ -883,6 +976,33 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       setOptionStatus(errorMessage(err));
     } finally {
       setOptionLoading(false);
+    }
+  }
+
+  async function syncMCXInstruments() {
+    setFutureLoading(true);
+    setFutureStatus('');
+    try {
+      await api.syncInstruments('MCX');
+      await loadFutureUnderlyings(true);
+      setFutureStatus('Synced MCX instruments');
+    } catch (err) {
+      setFutureStatus(errorMessage(err));
+    } finally {
+      setFutureLoading(false);
+    }
+  }
+
+  async function loadFutureUnderlyings(showStatus: boolean) {
+    try {
+      const values = await api.futureUnderlyings('MCX');
+      setFutureUnderlyings(values);
+      if (values.length && !values.includes(futureUnderlying)) {
+        setFutureUnderlying(values.includes('SILVERM') ? 'SILVERM' : values[0]);
+      }
+      if (showStatus && values.length === 0) setFutureStatus('No MCX futures found');
+    } catch (err) {
+      if (showStatus) setFutureStatus(errorMessage(err));
     }
   }
 
@@ -932,6 +1052,23 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     }
   }
 
+  async function loadFutureContracts() {
+    setFutureLoading(true);
+    setFutureStatus('');
+    try {
+      const result = await api.futureContracts('MCX', futureUnderlying, defaults?.default_product ?? 'MIS');
+      setFutures(result.contracts);
+      setSelectedFuture(result.contracts[0]?.tradingsymbol ?? '');
+      if (result.contracts[0]) selectFutureContract(result.contracts[0]);
+      setFutureStatus(`${result.contracts.length} contracts`);
+    } catch (err) {
+      setFutures([]);
+      setFutureStatus(errorMessage(err));
+    } finally {
+      setFutureLoading(false);
+    }
+  }
+
   async function loadUnderlyingQuote() {
     const instrument = underlyingQuoteInstrument(optionExchange, underlying);
     if (!instrument) {
@@ -955,7 +1092,20 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     if (contract) selectOptionContract(contract);
   }
 
-  function selectOptionContract(contract: OptionContract) {
+  function changeFutureUnderlying(value: string) {
+    setFutureUnderlying(value);
+    resetFutureSelection();
+  }
+
+  function selectFuture(value: string) {
+    setSelectedFuture(value);
+    const contract = futures.find((item) => item.tradingsymbol === value);
+    if (contract) selectFutureContract(contract);
+  }
+
+  function selectFutureContract(contract: FutureContract) {
+    const tickSize = contract.tick_size || MCX_DEFAULT_TICK_SIZE;
+    const pnlMultiplier = pnlMultiplierForInstrument(contract.exchange, contract.tradingsymbol, contract.underlying);
     setForm((current) => ({
       ...current,
       exchange: contract.exchange,
@@ -965,11 +1115,33 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       order_type: 'MARKET',
       price: undefined,
       market_protection: defaults?.default_market_protection,
-      protection: defaultProtection(),
+      protection: defaultProtection(undefined, 'MCX_FUTURES', tickSize),
     }));
     setSelectedLotSize(contract.lot_size || 0);
+    setSelectedTickSize(tickSize);
+    setSelectedPnlMultiplier(pnlMultiplier);
     setFormError('');
-    void fetchEntryLTP(contract.exchange, contract.tradingsymbol, false);
+    void fetchEntryLTP(contract.exchange, contract.tradingsymbol, false, tickSize);
+  }
+
+  function selectOptionContract(contract: OptionContract) {
+    const tickSize = contract.tick_size || DEFAULT_TICK_SIZE;
+    setForm((current) => ({
+      ...current,
+      exchange: contract.exchange,
+      tradingsymbol: contract.tradingsymbol,
+      product: contract.product || defaults?.default_product || 'MIS',
+      quantity: contract.default_quantity || contract.lot_size || current.quantity,
+      order_type: 'MARKET',
+      price: undefined,
+      market_protection: defaults?.default_market_protection,
+      protection: defaultProtection(undefined, instrumentMode, tickSize),
+    }));
+    setSelectedLotSize(contract.lot_size || 0);
+    setSelectedTickSize(tickSize);
+    setSelectedPnlMultiplier(1);
+    setFormError('');
+    void fetchEntryLTP(contract.exchange, contract.tradingsymbol, false, tickSize);
   }
 
   function applyProtectionPreset(stopLossPoints: number, targetPoints: number) {
@@ -1004,12 +1176,12 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       price,
       protection: {
         ...current.protection,
-        ...mergeAdaptiveProtection(current.protection, price, defaults),
+        ...mergeAdaptiveProtection(current.protection, price, defaults, instrumentMode, activeTickSize),
       },
     }));
   }
 
-  async function fetchEntryLTP(exchange = form.exchange, symbol = form.tradingsymbol, updateLimitPrice = false) {
+  async function fetchEntryLTP(exchange = form.exchange, symbol = form.tradingsymbol, updateLimitPrice = false, tickSize = activeTickSize) {
     if (!exchange || !symbol) return;
     setLTPLoading(true);
     setFormError('');
@@ -1021,7 +1193,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         protection: {
           ...current.protection,
           reference_price: result.last_price,
-          ...mergeAdaptiveProtection(current.protection, result.last_price, defaults),
+          ...mergeAdaptiveProtection(current.protection, result.last_price, defaults, instrumentModeForExchange(exchange, instrumentMode), tickSize),
         },
       }));
     } catch (err) {
@@ -1037,6 +1209,17 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
 
   return (
     <FormShell onSubmit={submit}>
+      <Select
+        label="Instrument"
+        value={instrumentMode}
+        options={[
+          { value: 'NFO_OPTIONS', label: 'NFO Options' },
+          { value: 'BFO_OPTIONS', label: 'BFO Options' },
+          { value: 'MCX_FUTURES', label: 'MCX Futures' },
+        ]}
+        onChange={changeInstrumentMode}
+      />
+      {isOptionsMode && (
       <div className="instrument-box">
         <div className="instrument-head">
           <strong>Options</strong>
@@ -1069,11 +1252,39 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         )}
         {optionStatus && <p className="form-hint">{optionStatus}</p>}
       </div>
+      )}
+      {isFuturesMode && (
+      <div className="instrument-box">
+        <div className="instrument-head">
+          <strong>MCX Futures</strong>
+          <button type="button" className="text-button" onClick={() => void syncMCXInstruments()} disabled={futureLoading}>
+            {futureLoading ? 'Loading' : 'Sync MCX'}
+          </button>
+        </div>
+        <div className="form-grid two">
+          <Select label="Commodity" value={futureUnderlying} options={futureUnderlyings.length ? futureUnderlyings : ['SILVERM', 'SILVER', 'GOLD']} onChange={changeFutureUnderlying} />
+        </div>
+        <button type="button" className="icon-text-button form-submit" onClick={() => void loadFutureContracts()} disabled={futureLoading || !futureUnderlying}>
+          <RefreshCw />
+          Load Futures
+        </button>
+        {futures.length > 0 && (
+          <Select
+            label="Future Contract"
+            value={selectedFuture}
+            options={futures.map((contract) => ({ value: contract.tradingsymbol, label: futureLabel(contract) }))}
+            onChange={selectFuture}
+          />
+        )}
+        {futureStatus && <p className="form-hint">{futureStatus}</p>}
+      </div>
+      )}
       <Segmented label="Side" value={form.side} options={['BUY', 'SELL']} onChange={(side) => setForm({ ...form, side: side as Side })} />
       <Input label="Quantity" type="number" min={1} step={1} value={form.quantity} onChange={(quantity) => setForm({ ...form, quantity: Number(quantity) })} />
       {selectedLotSize > 0 && <p className="form-hint">Lot size {selectedLotSize}. Quantity must be a multiple of this value.</p>}
+      {selectedPnlMultiplier !== 1 && <p className="form-hint">P&L preview multiplier {selectedPnlMultiplier}. Risk/reward uses points × quantity × multiplier.</p>}
       <div className="selected-box">
-        <strong>{form.tradingsymbol ? `${form.exchange}:${form.tradingsymbol}` : 'Select an option contract'}</strong>
+        <strong>{form.tradingsymbol ? `${form.exchange}:${form.tradingsymbol}` : 'Select a contract'}</strong>
         <span>{form.product}</span>
       </div>
       <Select label="Product" value={form.product} options={props.metadata?.enums.products ?? ['MIS', 'NRML']} onChange={(product) => setForm({ ...form, product })} />
@@ -1097,6 +1308,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
               <button type="button" key={preset.label} onClick={() => applyProtectionPreset(preset.stopLoss, preset.target)}>{preset.label}</button>
             ))}
           </div>
+          <p className="form-hint">Presets set SL/target as a percentage of entry basis; the point values below remain editable.</p>
           {form.order_type === 'LIMIT' ? (
             <div className="selected-box compact">
               <strong>Risk basis</strong>
@@ -1219,6 +1431,7 @@ function RiskPreview(props: { preview?: RiskPreviewData; orderType: string }) {
         ['Risk', signedMoney(-props.preview.riskAmount)],
         ['Reward', signedMoney(props.preview.rewardAmount)],
         ['R:R', props.preview.riskReward > 0 ? `1:${props.preview.riskReward.toFixed(2)}` : '-'],
+        ...(props.preview.pnlMultiplier !== 1 ? [['Multiplier', `x${props.preview.pnlMultiplier}`] as [string, React.ReactNode]] : []),
       ]} />
       {props.orderType === 'LIMIT' && <p className="form-hint">Protection is kept pending until the limit entry completes.</p>}
     </div>
@@ -1479,6 +1692,12 @@ function optionLabel(contract: OptionContract) {
   return `${contract.strike} ${contract.instrument_type} · ${contract.tradingsymbol} · lot ${contract.lot_size}`;
 }
 
+function futureLabel(contract: FutureContract) {
+  const expiry = contract.expiry ? ` · ${contract.expiry}` : '';
+  const tick = contract.tick_size ? ` · tick ${contract.tick_size}` : '';
+  return `${contract.tradingsymbol}${expiry} · lot ${contract.lot_size}${tick}`;
+}
+
 function groupProtectionLabel(group: PositionGroup, type: 'stop-loss' | 'target') {
   const count = type === 'stop-loss' ? group.stop_loss_count ?? 0 : group.target_count ?? 0;
   if (count === 0) return '-';
@@ -1650,20 +1869,23 @@ function entryBasisPrice(body: CreateTradeRequest) {
   return body.protection?.reference_price || body.price || 0;
 }
 
-function adaptiveProtection(entryPrice: number, defaults?: Metadata['runtime']): ProtectionDefaults {
-  const stopLoss = roundToTick(Math.max(0.05, entryPrice * 0.20));
-  const target = roundToTick(Math.max(0.10, entryPrice * 0.40));
-  const maxOffset = Math.max(0, entryPrice - stopLoss - 0.05);
+function adaptiveProtection(entryPrice: number, defaults?: Metadata['runtime'], mode: InstrumentMode = 'NFO_OPTIONS', tickSize = DEFAULT_TICK_SIZE): ProtectionDefaults {
+  const profile = protectionProfile(mode);
+  const defaultPreset = profile[1] ?? profile[0];
+  const tick = validTickSize(tickSize);
+  const stopLoss = roundToTick(Math.max(tick, entryPrice * defaultPreset.stopLossPercent), tick);
+  const target = roundToTick(Math.max(tick, entryPrice * defaultPreset.targetPercent), tick);
+  const maxOffset = Math.max(0, entryPrice - stopLoss - tick);
   const configuredOffset = defaults?.default_sl_limit_offset ?? 0;
   return {
     stop_loss_points: stopLoss || defaults?.default_stop_loss_points || undefined,
     target_points: target || defaults?.default_target_points || undefined,
-    sl_limit_offset: roundToTick(Math.min(configuredOffset, maxOffset)),
+    sl_limit_offset: roundToTick(Math.min(configuredOffset, maxOffset), tick),
   };
 }
 
-function mergeAdaptiveProtection(current: CreateTradeRequest['protection'], entryPrice: number, defaults?: Metadata['runtime']) {
-  const adaptive = adaptiveProtection(entryPrice, defaults);
+function mergeAdaptiveProtection(current: CreateTradeRequest['protection'], entryPrice: number, defaults?: Metadata['runtime'], mode: InstrumentMode = 'NFO_OPTIONS', tickSize = DEFAULT_TICK_SIZE) {
+  const adaptive = adaptiveProtection(entryPrice, defaults, mode, tickSize);
   const shouldReplaceStop = !current?.stop_loss_points || !safeStopForBuy(entryPrice, current.stop_loss_points, current.sl_limit_offset ?? 0);
   const shouldReplaceTarget = !current?.target_points;
   const shouldReplaceOffset = !safeStopForBuy(entryPrice, shouldReplaceStop ? adaptive.stop_loss_points ?? 0 : current?.stop_loss_points ?? 0, current?.sl_limit_offset ?? 0);
@@ -1674,40 +1896,77 @@ function mergeAdaptiveProtection(current: CreateTradeRequest['protection'], entr
   };
 }
 
-function protectionPresetOptions(entryPrice: number) {
+function protectionPresetOptions(entryPrice: number, mode: InstrumentMode, tickSize = DEFAULT_TICK_SIZE) {
+  const profile = protectionProfile(mode);
   if (entryPrice > 0) {
+    return profile.map((preset) => percentPreset(entryPrice, preset.stopLossPercent, preset.targetPercent, tickSize));
+  }
+  return profile.map((preset) => ({ label: `${percentLabel(preset.stopLossPercent)} / ${percentLabel(preset.targetPercent)}`, stopLoss: 0, target: 0 }));
+}
+
+function protectionProfile(mode: InstrumentMode): ProtectionPresetProfile {
+  if (mode === 'MCX_FUTURES') {
     return [
-      percentPreset(entryPrice, 0.10, 0.20),
-      percentPreset(entryPrice, 0.20, 0.40),
-      percentPreset(entryPrice, 0.30, 0.60),
+      { stopLossPercent: 0.001, targetPercent: 0.002 },
+      { stopLossPercent: 0.002, targetPercent: 0.003 },
+      { stopLossPercent: 0.003, targetPercent: 0.005 },
     ];
   }
   return [
-    { label: '10% / 20%', stopLoss: 0, target: 0 },
-    { label: '20% / 40%', stopLoss: 0, target: 0 },
-    { label: '30% / 60%', stopLoss: 0, target: 0 },
+    { stopLossPercent: 0.05, targetPercent: 0.10 },
+    { stopLossPercent: 0.10, targetPercent: 0.15 },
+    { stopLossPercent: 0.15, targetPercent: 0.25 },
   ];
 }
 
-function percentPreset(entryPrice: number, stopLossPercent: number, targetPercent: number) {
-  const stopLoss = roundToTick(Math.max(0.05, entryPrice * stopLossPercent));
-  const target = roundToTick(Math.max(0.10, entryPrice * targetPercent));
+function percentPreset(entryPrice: number, stopLossPercent: number, targetPercent: number, tickSize = DEFAULT_TICK_SIZE) {
+  const tick = validTickSize(tickSize);
+  const stopLoss = roundToTick(Math.max(tick, entryPrice * stopLossPercent), tick);
+  const target = roundToTick(Math.max(tick, entryPrice * targetPercent), tick);
   return {
-    label: `${money(stopLoss)} / ${money(target)}`,
+    label: `${percentLabel(stopLossPercent)} / ${percentLabel(targetPercent)}`,
     stopLoss,
     target,
   };
+}
+
+function percentLabel(value: number) {
+  const percent = value * 100;
+  return `${percent < 1 ? percent.toFixed(2) : percent.toFixed(0)}%`;
 }
 
 function safeStopForBuy(entryPrice: number, stopLossPoints: number, slOffset: number) {
   return entryPrice <= 0 || stopLossPoints <= 0 || entryPrice - stopLossPoints - slOffset > 0;
 }
 
-function roundToTick(value: number) {
-  return Math.round(value * 20) / 20;
+function roundToTick(value: number, tickSize = DEFAULT_TICK_SIZE) {
+  const tick = validTickSize(tickSize);
+  const rounded = Math.round(value / tick) * tick;
+  return Number(rounded.toFixed(decimalsForTick(tick)));
 }
 
-function riskPreview(body: CreateTradeRequest, withProtection: boolean): RiskPreviewData | undefined {
+function validTickSize(tickSize: number) {
+  return Number.isFinite(tickSize) && tickSize > 0 ? tickSize : DEFAULT_TICK_SIZE;
+}
+
+function decimalsForTick(tickSize: number) {
+  const text = tickSize.toString();
+  const decimal = text.includes('.') ? text.split('.')[1]?.length ?? 0 : 0;
+  return Math.min(Math.max(decimal, 0), 4);
+}
+
+function defaultTickSizeForMode(mode: InstrumentMode) {
+  return mode === 'MCX_FUTURES' ? MCX_DEFAULT_TICK_SIZE : DEFAULT_TICK_SIZE;
+}
+
+function instrumentModeForExchange(exchange: string, fallback: InstrumentMode): InstrumentMode {
+  if (exchange === 'MCX') return 'MCX_FUTURES';
+  if (exchange === 'BFO') return 'BFO_OPTIONS';
+  if (exchange === 'NFO') return 'NFO_OPTIONS';
+  return fallback;
+}
+
+function riskPreview(body: CreateTradeRequest, withProtection: boolean, pnlMultiplier = 1): RiskPreviewData | undefined {
   const protection = body.protection;
   if (!withProtection || !protection) return undefined;
   const referencePrice = entryBasisPrice(body);
@@ -1719,8 +1978,9 @@ function riskPreview(body: CreateTradeRequest, withProtection: boolean): RiskPre
   const stopTrigger = isSell ? referencePrice + stopLossPoints : referencePrice - stopLossPoints;
   const stopLimit = isSell ? stopTrigger + offset : stopTrigger - offset;
   const targetPrice = isSell ? referencePrice - targetPoints : referencePrice + targetPoints;
-  const riskAmount = stopLossPoints * body.quantity;
-  const rewardAmount = targetPoints * body.quantity;
+  const multiplier = validPnlMultiplier(pnlMultiplier);
+  const riskAmount = stopLossPoints * body.quantity * multiplier;
+  const rewardAmount = targetPoints * body.quantity * multiplier;
   return {
     referencePrice,
     stopTrigger,
@@ -1729,6 +1989,7 @@ function riskPreview(body: CreateTradeRequest, withProtection: boolean): RiskPre
     riskAmount,
     rewardAmount,
     riskReward: riskAmount > 0 ? rewardAmount / riskAmount : 0,
+    pnlMultiplier: multiplier,
   };
 }
 
@@ -1749,7 +2010,23 @@ function closedTradePnL(trade: ManagedTrade, orders: KiteOrder[]) {
   const exitPrice = closedTradeExitPrice(trade, orders);
   if (!exitPrice || !trade.entry_price || !trade.quantity) return undefined;
   const difference = trade.side === 'SELL' ? trade.entry_price - exitPrice : exitPrice - trade.entry_price;
-  return difference * trade.quantity;
+  return difference * trade.quantity * pnlMultiplierForInstrument(trade.exchange, trade.tradingsymbol);
+}
+
+function pnlMultiplierForInstrument(exchange: string, tradingsymbol: string, underlying = '') {
+  if (exchange.toUpperCase() !== 'MCX') return 1;
+  const root = mcxRootSymbol(tradingsymbol, underlying);
+  return MCX_PNL_MULTIPLIERS[root] ?? 1;
+}
+
+function mcxRootSymbol(tradingsymbol: string, underlying: string) {
+  const candidate = (underlying || tradingsymbol).toUpperCase();
+  const match = candidate.match(/^[A-Z]+/);
+  return match?.[0] ?? candidate;
+}
+
+function validPnlMultiplier(value: number) {
+  return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
 function orderMillis(order: KiteOrder) {

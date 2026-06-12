@@ -288,6 +288,14 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		result, err := instrumentService.Expiries(r.URL.Query().Get("exchange"), r.URL.Query().Get("underlying"))
 		writeInstrumentResult(r.Context(), w, result, err)
 	})
+	mux.HandleFunc("GET /instruments/future-underlyings", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.FutureUnderlyings(r.URL.Query().Get("exchange"))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /instruments/futures", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.Futures(r.URL.Query().Get("exchange"), r.URL.Query().Get("underlying"), r.URL.Query().Get("product"))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
 	mux.HandleFunc("GET /instruments/options", func(w http.ResponseWriter, r *http.Request) {
 		result, err := instrumentService.Options(r.Context(), optionFilterFromQuery(r))
 		writeInstrumentResult(r.Context(), w, result, err)

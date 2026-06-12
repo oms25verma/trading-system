@@ -163,7 +163,19 @@ curl "http://127.0.0.1:8080/instruments/expiries?exchange=NFO&underlying=NIFTY"
 curl "http://127.0.0.1:8080/instruments/options?exchange=NFO&underlying=NIFTY&range_points=1000&contracts_each_side=10"
 ```
 
-The New Trade drawer has an Options section that can sync `NFO` or `BFO`, list underlyings/expiries, show the selected underlying's LTP, and load contracts around ATM. The main UI hides manual center-strike and range controls for now; it uses the backend's ATM detection with a default `range_points=1000`. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
+Fetch MCX instrument master for commodity futures such as `GOLD`, `SILVER`, and `SILVERM`:
+
+```bash
+curl -X POST "http://127.0.0.1:8080/instruments/sync?exchange=MCX"
+curl "http://127.0.0.1:8080/instruments/future-underlyings?exchange=MCX"
+curl "http://127.0.0.1:8080/instruments/futures?exchange=MCX&underlying=SILVERM"
+```
+
+The New Trade drawer starts with an instrument selector. Choose `NFO Options`, `BFO Options`, or `MCX Futures`; the form then shows only the relevant controls.
+
+For options, the form can sync `NFO` or `BFO`, list underlyings/expiries, show the selected underlying's LTP, and load contracts around ATM. The main UI hides manual center-strike and range controls for now; it uses the backend's ATM detection with a default `range_points=1000`. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
+
+For MCX futures, sync `MCX`, choose a commodity, then load/select the futures contract. Lot size and tick size come from Kite's instrument master.
 
 ### 7. LTP And Market Data Permission
 
@@ -262,7 +274,7 @@ You can also use `"products": ["MIS", "NRML"]` to show the same instrument for m
 export SYMBOL_WATCHLIST=NSE:INFY:MIS,MCX:SILVERM26JUNFUT:MIS
 ```
 
-Lot-size validation still uses synced Kite instruments where available, so run `POST /instruments/sync?exchange=NFO` or `BFO` before placing dynamic F&O orders.
+Lot-size validation still uses synced Kite instruments where available, so run `POST /instruments/sync?exchange=NFO`, `BFO`, or `MCX` before placing dynamic F&O or commodity futures orders.
 
 Set `REQUIRE_ORDER_PROTECTION=true` when you want every new order request to include a `protection` block with both SL and target points. Defaults fill zero values inside the block, but the caller must intentionally request protection.
 
@@ -328,6 +340,39 @@ In the frontend this is shown as `Est. Entry Price` for `MARKET` orders. It is t
 For `LIMIT` orders, the limit price itself is used as the risk basis. The frontend hides the extra estimated-entry input in that case so the preview follows the editable limit price.
 
 For option premiums, the frontend adapts suggested SL/target points to the entry basis. This prevents low-premium contracts, such as an option trading near `25`, from getting a default `20` point SL that would create a negative stop price.
+
+Frontend protection presets are instrument-aware and remain editable after selection:
+
+```text
+NFO/BFO options -> 5% / 10%, 10% / 15%, 15% / 25%
+MCX futures     -> 0.10% / 0.20%, 0.20% / 0.30%, 0.30% / 0.50%
+```
+
+MCX uses tighter defaults because high-price futures such as `SILVERM` would otherwise produce very large intraday risk and target distances.
+
+Risk/reward preview uses this formula:
+
+```text
+estimated P&L = price points × order quantity × P&L multiplier
+```
+
+For NFO/BFO options and most equity-style instruments, Kite quantity already represents the lot-adjusted quantity, so the multiplier is `1`. For MCX futures, the frontend applies a commodity P&L multiplier when known. This multiplier is separate from Kite's instrument `lot_size`, which may be `1` for MCX contracts.
+
+Current MCX multipliers covered in the frontend preview:
+
+```text
+ALUMINIUM 5000   ALUMINI 1000      COPPER 2500
+LEAD 5000        LEADMINI 1000     NICKEL 1500
+ZINC 5000        ZINCMINI 1000
+GOLD 100         GOLDM 10          GOLDPETAL 1
+GOLDGUINEA 1     GOLDTEN 1
+SILVER 30        SILVERM 5         SILVERMIC 1
+SILVER100 0.1
+CRUDEOIL 100     CRUDEOILM 10
+NATURALGAS 1250  NATGASMINI 250
+```
+
+Example: `SILVERM` uses multiplier `5`, so a `1000` point move on quantity `1` previews approximately `5000` profit/loss. Unknown MCX roots fall back to multiplier `1` until verified.
 
 ```bash
 curl -X POST http://localhost:8080/trades \
@@ -474,6 +519,7 @@ Position reconciliation uses Kite net positions for the trade's exchange, symbol
 - If your ISP IP changes often, use a VPS/static IPv4 or VPN/tunnel through a static-IP server.
 - LTP/quote endpoints require Kite market-data permission; otherwise enter LIMIT prices manually.
 - F&O contract dropdowns require `POST /instruments/sync?exchange=NFO` or `BFO` after Kite credentials are configured.
+- MCX futures dropdowns require `POST /instruments/sync?exchange=MCX`.
 
 ## Notes
 
