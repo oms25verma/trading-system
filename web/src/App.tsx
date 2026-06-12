@@ -786,6 +786,7 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   const protectionPreview = riskPreview(form, effectiveWithProtection);
   const entryBasis = entryBasisPrice(form);
   const protectionPresets = protectionPresetOptions(entryBasis);
+  const createDisabledReason = createTradeDisabledReason(form, effectiveWithProtection, selectedLotSize);
 
   useEffect(() => {
     void loadOptionUnderlyings(optionExchange, false);
@@ -1120,7 +1121,8 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         </>
       )}
       {formError && <p className="form-error">{formError}</p>}
-      <button className="icon-text-button primary form-submit" type="submit"><Plus /> Create</button>
+      {createDisabledReason && <p className="form-hint">{createDisabledReason}</p>}
+      <button className="icon-text-button primary form-submit" type="submit" disabled={!!createDisabledReason}><Plus /> Create</button>
     </FormShell>
   );
 }
@@ -1595,6 +1597,12 @@ function isSyncResult(value: unknown): value is { synced_at: string } {
 
 function optionalNumber(value: string) {
   return value === '' ? undefined : Number(value);
+}
+
+function createTradeDisabledReason(body: CreateTradeRequest, withProtection: boolean, lotSize: number) {
+  if (!body.exchange.trim() || !body.tradingsymbol.trim()) return 'Select an option contract to enable Create.';
+  const validation = validateCreateTradeForm(body, withProtection, lotSize);
+  return validation || '';
 }
 
 function validateCreateTradeForm(body: CreateTradeRequest, withProtection: boolean, lotSize: number) {
