@@ -4,8 +4,11 @@ import type {
   DashboardSummary,
   KiteOrder,
   KitePosition,
+  LTPResponse,
   ManagedTrade,
   Metadata,
+  OptionContractsResponse,
+  OptionQuery,
   PositionGroup,
   StopLossRequest,
   TargetRequest,
@@ -56,6 +59,15 @@ function del<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+function queryString(params: object) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, String(value));
+  }
+  const raw = query.toString();
+  return raw ? `?${raw}` : '';
+}
+
 export const api = {
   metadata: () => request<Metadata>('/metadata'),
   dashboard: () => request<DashboardSummary>('/dashboard'),
@@ -65,6 +77,11 @@ export const api = {
   conflicts: () => request<PositionGroup[]>('/conflicts'),
   orders: () => request<KiteOrder[]>('/orders'),
   positions: () => request<KitePosition[]>('/positions'),
+  syncInstruments: (exchange = 'NFO') => post<unknown>(`/instruments/sync${queryString({ exchange })}`),
+  instrumentUnderlyings: (exchange = 'NFO') => request<string[]>(`/instruments/underlyings${queryString({ exchange })}`),
+  instrumentExpiries: (exchange: string, underlying: string) => request<string[]>(`/instruments/expiries${queryString({ exchange, underlying })}`),
+  optionContracts: (query: OptionQuery) => request<OptionContractsResponse>(`/instruments/options${queryString(query)}`),
+  ltp: (exchange: string, symbol: string) => request<LTPResponse>(`/market/ltp${queryString({ exchange, symbol })}`),
   createTrade: (body: CreateTradeRequest) => post<ManagedTrade>('/trades', body),
   addStopLoss: (tradeID: string, body: StopLossRequest) => post<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/stop-loss`, body),
   removeStopLoss: (tradeID: string) => del<ManagedTrade>(`/trades/${encodeURIComponent(tradeID)}/stop-loss`),

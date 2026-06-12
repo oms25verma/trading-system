@@ -65,7 +65,19 @@ You can also use `"products": ["MIS", "NRML"]` to show the same instrument for m
 export SYMBOL_WATCHLIST=NSE:INFY:MIS,MCX:SILVERM26JUNFUT:MIS
 ```
 
-Keep futures symbols updated as contracts expire. When a watchlist is configured, `ENFORCE_SYMBOL_WATCHLIST=true` rejects direct API order creation for symbols/products outside the file. Set it to `false` only for broad paper testing.
+Keep futures symbols updated as contracts expire. When a watchlist is configured, `ENFORCE_SYMBOL_WATCHLIST=true` rejects direct API order creation for symbols/products outside the file or the synced Kite instrument master. Set it to `false` only for broad paper testing.
+
+For F&O option chains, use Kite's instrument master instead of manually adding every contract:
+
+```bash
+curl -X POST "http://localhost:8080/instruments/sync?exchange=NFO"
+curl "http://localhost:8080/instruments/expiries?exchange=NFO&underlying=NIFTY"
+curl "http://localhost:8080/instruments/options?exchange=NFO&underlying=NIFTY&range_points=1000&contracts_each_side=10"
+```
+
+The New Trade drawer has an Options section that can sync `NFO` or `BFO`, list underlyings/expiries, and load contracts around ATM or a manual center strike. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
+
+For LIMIT orders, the UI can fill the limit price with `GET /market/ltp`. This requires Kite quote/LTP permission; if Kite returns `Insufficient permission for that call`, enable the required market-data permission for the app/account or enter the price manually.
 
 Set `REQUIRE_ORDER_PROTECTION=true` when you want every new order request to include a `protection` block with both SL and target points. Defaults fill zero values inside the block, but the caller must intentionally request protection.
 

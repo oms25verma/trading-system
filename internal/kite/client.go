@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -235,6 +236,21 @@ type PositionResponse struct {
 	Quantity      int    `json:"quantity"`
 }
 
+type Instrument struct {
+	InstrumentToken uint32
+	ExchangeToken   string
+	TradingSymbol   string
+	Name            string
+	LastPrice       float64
+	Expiry          string
+	Strike          float64
+	TickSize        float64
+	LotSize         int
+	InstrumentType  string
+	Segment         string
+	Exchange        string
+}
+
 func (c *Client) Positions(ctx context.Context) ([]PositionResponse, error) {
 	var out struct {
 		Data struct {
@@ -263,6 +279,18 @@ func (c *Client) LTP(ctx context.Context, exchange, symbol string) (float64, err
 		return 0, fmt.Errorf("ltp not found for %s", instrument)
 	}
 	return quote.LastPrice, nil
+}
+
+func (c *Client) Instruments(ctx context.Context, exchange string) ([]Instrument, error) {
+	path := "/instruments"
+	if strings.TrimSpace(exchange) != "" {
+		path += "/" + url.PathEscape(strings.ToUpper(strings.TrimSpace(exchange)))
+	}
+	payload, err := c.doRaw(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseInstrumentsCSV(payload)
 }
 
 func (c *Client) doForm(ctx context.Context, method, path string, form url.Values, out any) error {
@@ -318,6 +346,40 @@ func (c *Client) doPublic(ctx context.Context, method, path string, body io.Read
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, out any) error {
 	return c.doAuthenticated(ctx, method, path, body, out, nil)
+}
+
+func (c *Client) doRaw(ctx context.Context, method, path string, body io.Reader) ([]byte, error) {
+	if c.apiKey == "" || c.accessToken == "" {
+		return nil, errors.New("missing KITE_API_KEY or KITE_ACCESS_TOKEN")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Kite-Version", "3")
+	req.Header.Set("Authorization", "token "+c.apiKey+":"+c.accessToken)
+
+	startedAt := time.Now()
+	c.logBrokerRequest(ctx, method, path, nil)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logBrokerError(ctx, method, path, time.Since(startedAt), err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.logBrokerError(ctx, method, path, time.Since(startedAt), err)
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, true)
+		return nil, kiteAPIError(method, path, resp.StatusCode, payload)
+	}
+	c.logBrokerResponse(ctx, method, path, resp.StatusCode, time.Since(startedAt), payload, false)
+	return payload, nil
 }
 
 func (c *Client) doAuthenticated(ctx context.Context, method, path string, body io.Reader, out any, requestFields map[string]string) error {
@@ -499,4 +561,58 @@ func valueOr(value, fallback string) string {
 func checksum(apiKey, requestToken, apiSecret string) string {
 	sum := sha256.Sum256([]byte(apiKey + requestToken + apiSecret))
 	return fmt.Sprintf("%x", sum)
+}
+
+func parseInstrumentsCSV(payload []byte) ([]Instrument, error) {
+	reader := csv.NewReader(bytes.NewReader(payload))
+	reader.FieldsPerRecord = -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(records) <= 1 {
+		return nil, nil
+	}
+	out := make([]Instrument, 0, len(records)-1)
+	for _, record := range records[1:] {
+		if len(record) < 12 {
+			continue
+		}
+		token, _ := strconv.ParseUint(record[0], 10, 32)
+		lastPrice, _ := strconv.ParseFloat(emptyFloat(record[4]), 64)
+		strike, _ := strconv.ParseFloat(emptyFloat(record[6]), 64)
+		tickSize, _ := strconv.ParseFloat(emptyFloat(record[7]), 64)
+		lotSize, _ := strconv.Atoi(emptyInt(record[8]))
+		out = append(out, Instrument{
+			InstrumentToken: uint32(token),
+			ExchangeToken:   strings.TrimSpace(record[1]),
+			TradingSymbol:   strings.ToUpper(strings.TrimSpace(record[2])),
+			Name:            strings.ToUpper(strings.TrimSpace(record[3])),
+			LastPrice:       lastPrice,
+			Expiry:          strings.TrimSpace(record[5]),
+			Strike:          strike,
+			TickSize:        tickSize,
+			LotSize:         lotSize,
+			InstrumentType:  strings.ToUpper(strings.TrimSpace(record[9])),
+			Segment:         strings.ToUpper(strings.TrimSpace(record[10])),
+			Exchange:        strings.ToUpper(strings.TrimSpace(record[11])),
+		})
+	}
+	return out, nil
+}
+
+func emptyFloat(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "0"
+	}
+	return raw
+}
+
+func emptyInt(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "0"
+	}
+	return raw
 }

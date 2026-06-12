@@ -104,6 +104,54 @@ export interface KitePosition {
   synced_at: string;
 }
 
+export interface InstrumentSyncResult {
+  exchange: string;
+  count: number;
+  path: string;
+  synced_at: string;
+}
+
+export interface OptionContract {
+  exchange: string;
+  tradingsymbol: string;
+  underlying: string;
+  expiry: string;
+  strike: number;
+  instrument_type: 'CE' | 'PE' | string;
+  product: string;
+  default_quantity: number;
+  lot_size: number;
+  tick_size: number;
+}
+
+export interface OptionContractsResponse {
+  exchange: string;
+  underlying: string;
+  expiry: string;
+  center_strike?: number;
+  center_source?: string;
+  range_points?: number;
+  contracts_each_side?: number;
+  contracts: OptionContract[];
+}
+
+export interface OptionQuery {
+  exchange?: string;
+  underlying: string;
+  expiry?: string;
+  types?: string;
+  range_points?: number;
+  contracts_each_side?: number;
+  center_strike?: number;
+  product?: string;
+}
+
+export interface LTPResponse {
+  exchange: string;
+  tradingsymbol: string;
+  last_price: number;
+}
+
 export interface DashboardSummary {
   risk_status: RiskStatus;
   active_groups: number;

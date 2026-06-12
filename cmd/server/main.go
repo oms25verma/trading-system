@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"trading-system/internal/config"
+	"trading-system/internal/instruments"
 	"trading-system/internal/kite"
 	"trading-system/internal/observability"
 	"trading-system/internal/trading"
@@ -59,7 +62,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           requestIDMiddleware(routes(manager, kiteClient, cfg), logger),
+		Handler:           requestIDMiddleware(routes(manager, kiteClient, cfg, broker), logger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -178,8 +181,12 @@ func (h teeHandler) WithGroup(name string) slog.Handler {
 	return teeHandler{handlers: handlers}
 }
 
-func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config) http.Handler {
+func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config, brokers ...trading.Broker) http.Handler {
 	mux := http.NewServeMux()
+	var broker trading.Broker
+	if len(brokers) > 0 {
+		broker = brokers[0]
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -256,6 +263,41 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		result, err := manager.SyncKite(r.Context())
 		writeResult(r.Context(), w, result, err)
 	})
+	instrumentService := instruments.NewService(kiteClient, cfg.TradeStorePath)
+	mux.HandleFunc("POST /instruments/sync", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.Sync(r.Context(), r.URL.Query().Get("exchange"))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /instruments/underlyings", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.Underlyings(r.URL.Query().Get("exchange"))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /instruments/expiries", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.Expiries(r.URL.Query().Get("exchange"), r.URL.Query().Get("underlying"))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /instruments/options", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.Options(r.Context(), optionFilterFromQuery(r))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /market/ltp", func(w http.ResponseWriter, r *http.Request) {
+		if broker == nil {
+			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "broker_unavailable", Message: "broker is not available for LTP"})
+			return
+		}
+		exchange := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("exchange")))
+		symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+		if exchange == "" || symbol == "" {
+			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "missing_ltp_instrument", Message: "exchange and symbol are required"})
+			return
+		}
+		price, err := broker.LTP(r.Context(), exchange, symbol)
+		writeResult(r.Context(), w, map[string]any{
+			"exchange":      exchange,
+			"tradingsymbol": symbol,
+			"last_price":    price,
+		}, err)
+	})
 	mux.HandleFunc("GET /kite/login", func(w http.ResponseWriter, r *http.Request) {
 		loginURL, err := kiteClient.LoginURL()
 		if err != nil {
@@ -289,7 +331,7 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			return
 		}
 		applyCreateDefaults(&req, cfg)
-		if err := validateCreateTradeConfig(req, cfg); err != nil {
+		if err := validateCreateTradeConfig(req, cfg, instrumentService); err != nil {
 			writeError(r.Context(), w, err)
 			return
 		}
@@ -431,12 +473,12 @@ func applyCreateDefaults(req *trading.CreateTradeRequest, cfg config.Config) {
 	}
 }
 
-func validateCreateTradeConfig(req trading.CreateTradeRequest, cfg config.Config) error {
-	if cfg.EnforceSymbolWatchlist && len(cfg.SymbolWatchlist) > 0 && !watchlistAllows(req, cfg.SymbolWatchlist) {
+func validateCreateTradeConfig(req trading.CreateTradeRequest, cfg config.Config, instrumentService *instruments.Service) error {
+	if cfg.EnforceSymbolWatchlist && len(cfg.SymbolWatchlist) > 0 && !watchlistAllows(req, cfg.SymbolWatchlist) && !instrumentService.Allows(req.Exchange, req.TradingSymbol) {
 		return &trading.DomainError{
 			Kind:    trading.ErrorKindValidation,
 			Code:    "symbol_not_allowed",
-			Message: "symbol/product is not in SYMBOL_WATCHLIST; update config/symbols.json or disable ENFORCE_SYMBOL_WATCHLIST for broad testing",
+			Message: "symbol/product is not in SYMBOL_WATCHLIST or synced Kite instruments; update config/symbols.json, run instruments sync, or disable ENFORCE_SYMBOL_WATCHLIST for broad testing",
 		}
 	}
 	if cfg.RequireOrderProtection {
@@ -448,7 +490,70 @@ func validateCreateTradeConfig(req trading.CreateTradeRequest, cfg config.Config
 			}
 		}
 	}
+	if lotSize := createTradeLotSize(req, cfg, instrumentService); lotSize > 0 && req.Quantity%lotSize != 0 {
+		return &trading.DomainError{
+			Kind:    trading.ErrorKindValidation,
+			Code:    "invalid_lot_quantity",
+			Message: fmt.Sprintf("quantity must be a multiple of lot size %d for %s:%s", lotSize, req.Exchange, req.TradingSymbol),
+		}
+	}
 	return nil
+}
+
+func createTradeLotSize(req trading.CreateTradeRequest, cfg config.Config, instrumentService *instruments.Service) int {
+	for _, item := range cfg.SymbolWatchlist {
+		if strings.EqualFold(item.Exchange, req.Exchange) &&
+			strings.EqualFold(item.TradingSymbol, req.TradingSymbol) &&
+			strings.EqualFold(item.Product, req.Product) &&
+			item.LotSize > 0 {
+			return item.LotSize
+		}
+	}
+	if instrumentService != nil {
+		if lotSize, ok := instrumentService.LotSize(req.Exchange, req.TradingSymbol); ok {
+			return lotSize
+		}
+	}
+	return 0
+}
+
+func optionFilterFromQuery(r *http.Request) instruments.OptionFilter {
+	query := r.URL.Query()
+	return instruments.OptionFilter{
+		Exchange:          query.Get("exchange"),
+		Underlying:        query.Get("underlying"),
+		Expiry:            query.Get("expiry"),
+		Types:             splitCSV(query.Get("types")),
+		RangePoints:       floatQuery(query.Get("range_points")),
+		ContractsEachSide: intQuery(query.Get("contracts_each_side")),
+		CenterStrike:      floatQuery(query.Get("center_strike")),
+		Product:           query.Get("product"),
+	}
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func floatQuery(raw string) float64 {
+	value, _ := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	return value
+}
+
+func intQuery(raw string) int {
+	value, _ := strconv.Atoi(strings.TrimSpace(raw))
+	return value
 }
 
 func watchlistAllows(req trading.CreateTradeRequest, items []config.SymbolWatchItem) bool {
@@ -500,6 +605,18 @@ func writeResult(ctx context.Context, w http.ResponseWriter, value any, err erro
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+func writeInstrumentResult(ctx context.Context, w http.ResponseWriter, value any, err error) {
+	if errors.Is(err, instruments.ErrInstrumentCacheMissing) {
+		writeError(ctx, w, &trading.DomainError{
+			Kind:    trading.ErrorKindValidation,
+			Code:    "instrument_cache_missing",
+			Message: err.Error(),
+		})
+		return
+	}
+	writeResult(ctx, w, value, err)
 }
 
 type apiError struct {

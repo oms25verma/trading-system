@@ -289,6 +289,35 @@ func TestCreateTradeRequiresConfiguredProtection(t *testing.T) {
 	}
 }
 
+func TestCreateTradeRejectsQuantityNotMultipleOfWatchlistLotSize(t *testing.T) {
+	manager := trading.NewManager(trading.NewPaperBroker())
+	cfg := config.Config{
+		DefaultProduct:         "MIS",
+		DefaultQuantity:        1,
+		EnforceSymbolWatchlist: true,
+		SymbolWatchlist: []config.SymbolWatchItem{
+			{Exchange: "NFO", TradingSymbol: "NIFTY2661623250CE", Product: "MIS", LotSize: 65},
+		},
+	}
+	handler := routes(manager, kite.NewClient("", "", ""), cfg)
+
+	body := []byte(`{"exchange":"NFO","tradingsymbol":"NIFTY2661623250CE","side":"BUY","quantity":1,"product":"MIS","order_type":"MARKET"}`)
+	req := httptest.NewRequest(http.MethodPost, "/trades", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response apiError
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != "invalid_lot_quantity" {
+		t.Fatalf("unexpected error: %+v", response)
+	}
+}
+
 func TestConflictsRouteReturnsAttentionGroups(t *testing.T) {
 	manager := newHTTPTestManager(t)
 	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})

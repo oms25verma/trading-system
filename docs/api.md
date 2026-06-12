@@ -136,6 +136,31 @@ This endpoint is always available as a force refresh. Automatic background sync 
 }
 ```
 
+## Kite Instrument Master
+
+Use these endpoints to populate option dropdowns without hand-maintaining hundreds of contracts. Kite's instrument dump is large and should be synced once per day, then read from local JSON cache.
+
+```http
+POST /instruments/sync?exchange=NFO
+GET /instruments/underlyings?exchange=NFO
+GET /instruments/expiries?exchange=NFO&underlying=NIFTY
+GET /instruments/options?exchange=NFO&underlying=NIFTY&expiry=2026-06-16&types=CE,PE&range_points=1000&contracts_each_side=10
+```
+
+`/instruments/options` defaults to `NFO`, the nearest expiry, `CE,PE`, `MIS`, ±1000 points, and 10 strikes on each side of the center. It tries to derive ATM from LTP. If LTP is unavailable, it falls back to a median strike; you can override with `center_strike=23500`.
+
+When `ENFORCE_SYMBOL_WATCHLIST=true`, symbols found in the synced instrument cache are accepted by `POST /trades` even if they are not listed in `config/symbols.json`.
+
+Synced option contracts include `lot_size`; order quantities must be multiples of the lot size. The UI validates this before submit and the backend enforces it for direct API calls.
+
+## Market LTP
+
+```http
+GET /market/ltp?exchange=NFO&symbol=NIFTY2661623250CE
+```
+
+Returns `last_price` from the configured broker and is used by the New Trade form to fill LIMIT price. With Kite, this depends on quote/LTP permission. If Kite returns `Insufficient permission for that call`, enable the required market-data permission for the app/account or enter the LIMIT price manually.
+
 ### List Synced Orders
 
 ```http

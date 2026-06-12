@@ -617,6 +617,13 @@ tr:last-child td {
   gap: 12px;
 }
 
+.input-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -701,6 +708,34 @@ tr:last-child td {
 
 .selected-box span {
   color: #687782;
+}
+
+.instrument-box {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #dce5eb;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.instrument-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.instrument-head strong {
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.form-hint {
+  margin: 0;
+  color: #687782;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .detail-stack {
@@ -804,6 +839,7 @@ tr:last-child td {
   .metric-grid,
   .work-grid,
   .form-grid.two,
+  .input-action-row,
   .table-controls {
     grid-template-columns: 1fr;
   }
