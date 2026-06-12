@@ -1138,6 +1138,32 @@ func (m *Manager) ListGroups() []*PositionGroup {
 	return m.positionGroupsLocked()
 }
 
+func (m *Manager) ListGroupsWithMarket(ctx context.Context) ([]*PositionGroup, error) {
+	groups := m.ListGroups()
+	refs := make([]InstrumentRef, 0, len(groups))
+	seen := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		if group == nil || group.Quantity == 0 {
+			continue
+		}
+		key := marketQuoteKey(group.Exchange, group.TradingSymbol)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, InstrumentRef{Exchange: group.Exchange, TradingSymbol: group.TradingSymbol})
+	}
+	if len(refs) == 0 {
+		return groups, nil
+	}
+	quotes, err := m.marketQuotes(ctx, refs)
+	if err != nil {
+		return nil, err
+	}
+	applyMarketQuotesToGroups(groups, quotes)
+	return groups, nil
+}
+
 func (m *Manager) GetGroup(id string) (*PositionGroup, error) {
 	id = strings.ToUpper(id)
 	m.mu.RLock()
@@ -1370,6 +1396,9 @@ func (m *Manager) SyncKite(ctx context.Context) (*SyncResult, error) {
 			TradingSymbol: position.TradingSymbol,
 			Product:       position.Product,
 			Quantity:      position.Quantity,
+			AveragePrice:  position.AveragePrice,
+			LastPrice:     position.LastPrice,
+			PnL:           position.PnL,
 			SyncedAt:      syncedAt,
 		}
 		nextPositions[positionKey(position.Exchange, position.TradingSymbol, position.Product)] = syncedPosition
@@ -2347,24 +2376,36 @@ func (m *Manager) positionGroupsLocked() []*PositionGroup {
 		brokerSide := sideFromQuantity(position.Quantity)
 		if group == nil {
 			group = &PositionGroup{
-				ID:               groupID,
-				Exchange:         strings.ToUpper(position.Exchange),
-				TradingSymbol:    strings.ToUpper(position.TradingSymbol),
-				Product:          strings.ToUpper(position.Product),
-				Side:             brokerSide,
-				Quantity:         brokerQuantity,
-				BrokerQuantity:   brokerQuantity,
-				TradeStatus:      TradeStatusOpen,
-				CreationSource:   CreationSourceKiteApp,
-				ManagementStatus: ManagementStatusUnmanaged,
-				CreatedAt:        position.SyncedAt,
-				UpdatedAt:        position.SyncedAt,
+				ID:                groupID,
+				Exchange:          strings.ToUpper(position.Exchange),
+				TradingSymbol:     strings.ToUpper(position.TradingSymbol),
+				Product:           strings.ToUpper(position.Product),
+				Side:              brokerSide,
+				Quantity:          brokerQuantity,
+				BrokerQuantity:    brokerQuantity,
+				AverageEntryPrice: position.AveragePrice,
+				LastPrice:         position.LastPrice,
+				UnrealizedPnL:     position.PnL,
+				TradeStatus:       TradeStatusOpen,
+				CreationSource:    CreationSourceKiteApp,
+				ManagementStatus:  ManagementStatusUnmanaged,
+				CreatedAt:         position.SyncedAt,
+				UpdatedAt:         position.SyncedAt,
 			}
 			groupsByID[groupID] = group
 			continue
 		}
 		group.BrokerQuantity = brokerQuantity
 		group.Quantity = brokerQuantity
+		if group.AverageEntryPrice == 0 && position.AveragePrice > 0 {
+			group.AverageEntryPrice = position.AveragePrice
+		}
+		if group.LastPrice == 0 && position.LastPrice > 0 {
+			group.LastPrice = position.LastPrice
+		}
+		if group.UnrealizedPnL == 0 && position.PnL != 0 {
+			group.UnrealizedPnL = position.PnL
+		}
 		if brokerSide != group.Side {
 			group.Warnings = appendUnique(group.Warnings, WarningPositionQuantityMismatch)
 			group.ManagementStatus = ManagementStatusPartiallyManaged
@@ -2440,6 +2481,82 @@ func applyTradeProtectionToGroup(group *PositionGroup, trade *ManagedTrade) {
 		}
 		group.ExitPending = true
 	}
+}
+
+func (m *Manager) marketQuotes(ctx context.Context, refs []InstrumentRef) (map[string]MarketQuote, error) {
+	if batcher, ok := m.broker.(BatchLTPBroker); ok {
+		return batchLTP(ctx, batcher, refs)
+	}
+	now := time.Now().UTC()
+	quotes := make(map[string]MarketQuote, len(refs))
+	for _, ref := range refs {
+		exchange := strings.ToUpper(strings.TrimSpace(ref.Exchange))
+		symbol := strings.ToUpper(strings.TrimSpace(ref.TradingSymbol))
+		if exchange == "" || symbol == "" {
+			continue
+		}
+		price, err := m.broker.LTP(ctx, exchange, symbol)
+		if err != nil {
+			return nil, err
+		}
+		quotes[marketQuoteKey(exchange, symbol)] = MarketQuote{
+			Exchange:      exchange,
+			TradingSymbol: symbol,
+			LastPrice:     price,
+			SyncedAt:      now,
+		}
+	}
+	return quotes, nil
+}
+
+func batchLTP(ctx context.Context, batcher BatchLTPBroker, refs []InstrumentRef) (map[string]MarketQuote, error) {
+	const maxLTPBatch = 1000
+	quotes := make(map[string]MarketQuote, len(refs))
+	for start := 0; start < len(refs); start += maxLTPBatch {
+		end := start + maxLTPBatch
+		if end > len(refs) {
+			end = len(refs)
+		}
+		chunk, err := batcher.LTPBatch(ctx, refs[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for key, quote := range chunk {
+			quotes[key] = quote
+		}
+	}
+	return quotes, nil
+}
+
+func applyMarketQuotesToGroups(groups []*PositionGroup, quotes map[string]MarketQuote) {
+	for _, group := range groups {
+		if group == nil {
+			continue
+		}
+		quote, ok := quotes[marketQuoteKey(group.Exchange, group.TradingSymbol)]
+		if !ok || quote.LastPrice <= 0 {
+			continue
+		}
+		group.LastPrice = quote.LastPrice
+		group.MarketSyncedAt = quote.SyncedAt
+		basis := group.AverageEntryPrice
+		if basis <= 0 || group.Quantity <= 0 {
+			continue
+		}
+		if strings.EqualFold(group.Side, "SELL") {
+			group.UnrealizedPnL = (basis - quote.LastPrice) * float64(group.Quantity)
+		} else {
+			group.UnrealizedPnL = (quote.LastPrice - basis) * float64(group.Quantity)
+		}
+		exposure := basis * float64(group.Quantity)
+		if exposure > 0 {
+			group.PnLPercent = group.UnrealizedPnL / exposure * 100
+		}
+	}
+}
+
+func marketQuoteKey(exchange, symbol string) string {
+	return strings.ToUpper(strings.TrimSpace(exchange)) + ":" + strings.ToUpper(strings.TrimSpace(symbol))
 }
 
 func (m *Manager) applyExternalExitConflictWarningsLocked(group *PositionGroup) {

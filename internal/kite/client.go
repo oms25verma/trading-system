@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trading-system/internal/observability"
+	"trading-system/internal/trading"
 )
 
 const baseURL = "https://api.kite.trade"
@@ -230,10 +231,13 @@ type OrderDetailsResponse struct {
 }
 
 type PositionResponse struct {
-	Exchange      string `json:"exchange"`
-	TradingSymbol string `json:"tradingsymbol"`
-	Product       string `json:"product"`
-	Quantity      int    `json:"quantity"`
+	Exchange      string  `json:"exchange"`
+	TradingSymbol string  `json:"tradingsymbol"`
+	Product       string  `json:"product"`
+	Quantity      int     `json:"quantity"`
+	AveragePrice  float64 `json:"average_price"`
+	LastPrice     float64 `json:"last_price"`
+	PnL           float64 `json:"pnl"`
 }
 
 type Instrument struct {
@@ -279,6 +283,47 @@ func (c *Client) LTP(ctx context.Context, exchange, symbol string) (float64, err
 		return 0, fmt.Errorf("ltp not found for %s", instrument)
 	}
 	return quote.LastPrice, nil
+}
+
+func (c *Client) LTPBatch(ctx context.Context, instruments []trading.InstrumentRef) (map[string]trading.MarketQuote, error) {
+	query := url.Values{}
+	requested := make(map[string]trading.InstrumentRef, len(instruments))
+	for _, instrument := range instruments {
+		exchange := strings.ToUpper(strings.TrimSpace(instrument.Exchange))
+		symbol := strings.ToUpper(strings.TrimSpace(instrument.TradingSymbol))
+		if exchange == "" || symbol == "" {
+			continue
+		}
+		key := exchange + ":" + symbol
+		if _, ok := requested[key]; ok {
+			continue
+		}
+		requested[key] = trading.InstrumentRef{Exchange: exchange, TradingSymbol: symbol}
+		query.Add("i", key)
+	}
+	if len(requested) == 0 {
+		return map[string]trading.MarketQuote{}, nil
+	}
+	var out struct {
+		Data map[string]struct {
+			LastPrice float64 `json:"last_price"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/quote/ltp?"+query.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	quotes := make(map[string]trading.MarketQuote, len(out.Data))
+	for key, quote := range out.Data {
+		instrument := requested[key]
+		quotes[key] = trading.MarketQuote{
+			Exchange:      instrument.Exchange,
+			TradingSymbol: instrument.TradingSymbol,
+			LastPrice:     quote.LastPrice,
+			SyncedAt:      now,
+		}
+	}
+	return quotes, nil
 }
 
 func (c *Client) Instruments(ctx context.Context, exchange string) ([]Instrument, error) {

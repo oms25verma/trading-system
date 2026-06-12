@@ -206,6 +206,7 @@ func endpointMap() map[string][]string {
 		"/instruments/expiries":                 {"GET"},
 		"/instruments/options":                  {"GET"},
 		"/market/ltp":                           {"GET"},
+		"/market/groups":                        {"GET"},
 		"/kite/login":                           {"GET"},
 		"/kite/callback":                        {"GET"},
 		"/trades":                               {"GET", "POST"},
@@ -230,6 +231,7 @@ func endpointMap() map[string][]string {
 		"/orders/{id}":                          {"GET"},
 		"/orders/{id}/cancel":                   {"POST"},
 		"/positions":                            {"GET"},
+		"/positions/live":                       {"GET"},
 		"/positions/{id}":                       {"GET"},
 	}
 }

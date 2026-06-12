@@ -231,7 +231,7 @@ func TestOpenAPISpecIncludesAllMetadataEndpoints(t *testing.T) {
 	}
 }
 
-func TestCreateTradeRejectsSymbolOutsideWatchlist(t *testing.T) {
+func TestCreateTradeAllowsSymbolOutsideWatchlistWhileWatchlistIsParked(t *testing.T) {
 	manager := trading.NewManager(trading.NewPaperBroker())
 	cfg := config.Config{
 		DefaultProduct:         "MIS",
@@ -248,15 +248,8 @@ func TestCreateTradeRejectsSymbolOutsideWatchlist(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-	var response apiError
-	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Code != "symbol_not_allowed" {
-		t.Fatalf("unexpected error: %+v", response)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 while watchlist enforcement is parked, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

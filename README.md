@@ -6,6 +6,7 @@ This is a small starter service for managing trades through a broker adapter. It
 - add/remove stop-loss orders
 - add/remove target orders
 - active position groups from current local trades
+- live position-group LTP and unrealized P&L view
 - dashboard summary for counts, conflicts, warnings, and active orders
 - conflict queue for groups that need operator attention
 - orderbook cancellation for open synced orders
@@ -36,8 +37,8 @@ For first local testing, keep:
 BROKER=paper
 HTTP_ADDR=:8080
 TRADE_STORE_PATH=data
-SYMBOL_WATCHLIST_FILE=config/symbols.json
-ENFORCE_SYMBOL_WATCHLIST=true
+# SYMBOL_WATCHLIST_FILE=config/symbols.json
+ENFORCE_SYMBOL_WATCHLIST=false
 ```
 
 Load the file before running the backend:
@@ -162,7 +163,7 @@ curl "http://127.0.0.1:8080/instruments/expiries?exchange=NFO&underlying=NIFTY"
 curl "http://127.0.0.1:8080/instruments/options?exchange=NFO&underlying=NIFTY&range_points=1000&contracts_each_side=10"
 ```
 
-The New Trade drawer has an Options section that can sync `NFO` or `BFO`, list underlyings/expiries, and load contracts around ATM or a manual center strike. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
+The New Trade drawer has an Options section that can sync `NFO` or `BFO`, list underlyings/expiries, show the selected underlying's LTP, and load contracts around ATM. The main UI hides manual center-strike and range controls for now; it uses the backend's ATM detection with a default `range_points=1000`. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
 
 ### 7. LTP And Market Data Permission
 
@@ -179,6 +180,29 @@ Insufficient permission for that call
 ```
 
 enable the required market-data permission for the Kite app/account, or enter the LIMIT price manually.
+
+The Positions page also uses:
+
+```http
+GET /market/groups
+GET /positions/live
+```
+
+`/market/groups` returns the current position groups enriched with batched LTP, unrealized P&L, and P&L percent where market data is available. `/positions/live` reads the broker's current net positions directly, so Kite positions can appear in the UI even before local sync snapshots have been persisted. The frontend polls the backend every 5 seconds by default and has a Live/Paused toggle in the top bar. Polling calls your local backend only; the backend batches active symbols into Kite `/quote/ltp` requests when supported.
+
+Kite's market quote docs currently state:
+
+- `/quote` supports up to 500 instruments per request.
+- `/quote/ohlc` supports up to 1000 instruments per request.
+- `/quote/ltp` supports up to 1000 instruments per request.
+- WebSocket streaming is the realtime quote path and supports up to 3000 instruments per connection, with up to 3 WebSocket connections per API key.
+
+Docs:
+
+- https://kite.trade/docs/connect/v3/market-quotes/
+- https://kite.trade/docs/connect/v3/websocket/
+
+For now this app uses conservative batched REST polling for the UI and keeps Kite WebSocket parked for the next realtime phase.
 
 ### 8. Logs And Persistence
 
@@ -205,10 +229,13 @@ Every request gets an `X-Request-ID`; pass your own or use the generated respons
 
 ## Configuration Notes
 
-To restrict order entry to specific instruments, prefer a JSON watchlist file:
+Watchlist-based order entry is currently parked. The app now prefers Kite instrument-master sync for option contracts because it gives current expiries, strikes, lot sizes, and tick sizes without manually maintaining many symbols.
+
+The old watchlist config is still documented here for later reuse, but backend symbol rejection is intentionally disabled while dynamic Kite instruments are the primary order-entry source:
 
 ```bash
-export SYMBOL_WATCHLIST_FILE=config/symbols.json
+# export SYMBOL_WATCHLIST_FILE=config/symbols.json
+export ENFORCE_SYMBOL_WATCHLIST=false
 ```
 
 Example:
@@ -235,7 +262,7 @@ You can also use `"products": ["MIS", "NRML"]` to show the same instrument for m
 export SYMBOL_WATCHLIST=NSE:INFY:MIS,MCX:SILVERM26JUNFUT:MIS
 ```
 
-When a watchlist is configured, `ENFORCE_SYMBOL_WATCHLIST=true` rejects direct API order creation for symbols/products outside the file or the synced Kite instrument master. Set it to `false` only for broad paper testing.
+Lot-size validation still uses synced Kite instruments where available, so run `POST /instruments/sync?exchange=NFO` or `BFO` before placing dynamic F&O orders.
 
 Set `REQUIRE_ORDER_PROTECTION=true` when you want every new order request to include a `protection` block with both SL and target points. Defaults fill zero values inside the block, but the caller must intentionally request protection.
 
@@ -296,6 +323,10 @@ SELL trade -> stop-loss above entry, target below entry
 
 Add a `protection` block to place stop-loss and target orders for the entry.
 
+In the frontend this is shown as `Est. Entry Price` for `MARKET` orders. It is the risk basis used to preview SL/target before the actual fill is known. In the API the field is still named `reference_price`.
+
+For `LIMIT` orders, the limit price itself is used as the risk basis. The frontend hides the extra estimated-entry input in that case so the preview follows the editable limit price.
+
 ```bash
 curl -X POST http://localhost:8080/trades \
   -H 'Content-Type: application/json' \
@@ -325,7 +356,7 @@ stop-loss limit   = 109025
 target            = 108960
 ```
 
-For a `BUY` trade, the same points are applied in the opposite direction. For `MARKET` orders, pass `reference_price` if you want deterministic SL/target prices; otherwise the service tries to use LTP.
+For a `BUY` trade, the same points are applied in the opposite direction. For `MARKET` orders, pass `reference_price` if you want deterministic SL/target prices; otherwise the service tries to use LTP. `trail_by` is optional; when set, the backend trailing-stop poller moves the SL in your favor by that point gap while the position is active.
 
 If `sl_limit_offset` is omitted, defaults are currently:
 

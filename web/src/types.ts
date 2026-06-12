@@ -55,6 +55,10 @@ export interface PositionGroup {
   local_quantity?: number;
   broker_quantity?: number;
   average_entry_price?: number;
+  last_price?: number;
+  unrealized_pnl?: number;
+  pnl_percent?: number;
+  market_synced_at?: string;
   trade_ids: string[];
   trade_status: string;
   creation_source: string;
@@ -101,6 +105,9 @@ export interface KitePosition {
   tradingsymbol: string;
   product: string;
   quantity: number;
+  average_price?: number;
+  last_price?: number;
+  pnl?: number;
   synced_at: string;
 }
 
