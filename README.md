@@ -14,26 +14,196 @@ This is a small starter service for managing trades through a broker adapter. It
 - paper broker mode for local testing
 - Kite HTTP adapter using Kite Connect v3 endpoints
 
-## Run locally
+## Quick Start
+
+Requirements:
+
+- Go `1.22+`
+- Node `20.20.0` for the frontend (`web/.nvmrc`)
+- Zerodha Kite Connect app only when using `BROKER=kite`
+
+### 1. Configure Environment
+
+Create a local `.env` file:
 
 ```bash
-go run ./cmd/server
+cp .env.example .env
 ```
 
-The server starts on `:8080` and uses the paper broker by default.
+For first local testing, keep:
 
 ```bash
-curl http://localhost:8080/healthz
+BROKER=paper
+HTTP_ADDR=:8080
+TRADE_STORE_PATH=data
+SYMBOL_WATCHLIST_FILE=config/symbols.json
+ENFORCE_SYMBOL_WATCHLIST=true
 ```
 
-For frontend bootstrap and API discovery:
+Load the file before running the backend:
 
 ```bash
-curl http://localhost:8080/metadata
-curl http://localhost:8080/openapi.json
+set -a
+source .env
+set +a
+```
+
+You need to repeat the `source .env` step in every new terminal session, unless you put these exports in your shell profile.
+
+### 2. Run Backend
+
+```bash
+GOCACHE=/private/tmp/trading-system-gocache go run ./cmd/server
+```
+
+The server starts on `http://127.0.0.1:8080`.
+
+Check it:
+
+```bash
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/metadata
+curl http://127.0.0.1:8080/openapi.json
 ```
 
 `/openapi.json` includes starter request/response schemas for the trade, group, orderbook, sync, and dashboard flows.
+
+### 3. Run Frontend
+
+In another terminal:
+
+```bash
+cd web
+nvm use
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+The Vite dev server proxies `/api/*` to `http://127.0.0.1:8080`, so keep the Go backend running.
+
+### 4. Optional: Use Kite Live Broker
+
+In the Kite developer console, set the redirect URL to:
+
+```text
+http://127.0.0.1:8080/kite/callback
+```
+
+You do not need a public server for login. Kite redirects your browser back to your local machine.
+
+Set these in `.env`:
+
+```bash
+BROKER=paper
+KITE_API_KEY=your_api_key
+KITE_API_SECRET=your_api_secret
+```
+
+Start the backend, then open:
+
+```text
+http://127.0.0.1:8080/kite/login
+```
+
+After Zerodha login, the browser returns to `/kite/callback` and prints `access_token`. Put that token into `.env`:
+
+```bash
+BROKER=kite
+KITE_ACCESS_TOKEN=access_token_from_callback
+```
+
+Then reload env and restart the backend:
+
+```bash
+set -a
+source .env
+set +a
+GOCACHE=/private/tmp/trading-system-gocache go run ./cmd/server
+```
+
+Kite access tokens are short-lived; expect to repeat the login/token step each trading day.
+
+### 5. Kite Allowed IP For Order Placement
+
+Kite live order placement requires the app's allowed IP list to include your current public IP. Check your public IP:
+
+```bash
+curl -4 https://ifconfig.me
+curl -6 https://ifconfig.me
+```
+
+Add the IP shown in Kite developer console. If your ISP gives dynamic IPs, this may change frequently. For production, prefer a VPS/static IPv4 or a VPN/tunnel through a static-IP server.
+
+If you see this error, your current IP is not whitelisted:
+
+```text
+IP (...) is not allowed to place orders for this app
+```
+
+### 6. Optional: Sync Kite Data And Instruments
+
+Fetch Kite orders and positions:
+
+```bash
+curl -X POST http://127.0.0.1:8080/sync/kite
+```
+
+Fetch F&O instrument master for option dropdowns:
+
+```bash
+curl -X POST "http://127.0.0.1:8080/instruments/sync?exchange=NFO"
+curl "http://127.0.0.1:8080/instruments/expiries?exchange=NFO&underlying=NIFTY"
+curl "http://127.0.0.1:8080/instruments/options?exchange=NFO&underlying=NIFTY&range_points=1000&contracts_each_side=10"
+```
+
+The New Trade drawer has an Options section that can sync `NFO` or `BFO`, list underlyings/expiries, and load contracts around ATM or a manual center strike. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
+
+### 7. LTP And Market Data Permission
+
+For LIMIT orders, the UI can fill the limit price with:
+
+```http
+GET /market/ltp?exchange=NFO&symbol=NIFTY2661623250CE
+```
+
+With Kite, this requires quote/LTP permission. If Kite returns:
+
+```text
+Insufficient permission for that call
+```
+
+enable the required market-data permission for the Kite app/account, or enter the LIMIT price manually.
+
+### 8. Logs And Persistence
+
+Trades, synced orderbook snapshots, synced position snapshots, and instrument cache files are stored under `data/` by default. Examples:
+
+```text
+data/trades_24_05_2026.json
+data/orders_24_05_2026.json
+data/positions_24_05_2026.json
+data/instruments_NFO_12_06_2026.json
+```
+
+Override storage with:
+
+```bash
+export TRADE_STORE_PATH=/path/to/trading-data
+```
+
+Logs are emitted as structured JSON to stdout. Set `LOG_LEVEL=debug|info|warn|error`.
+
+Warning and error logs are also written to `ERROR_LOG_PATH` (`data/error.log` by default). That file is truncated every time the server starts, so it contains only the current run's actionable failures. Expected validation rejects and Kite `InputException` order rejects stay in stdout with request ids, but are not copied into the error file.
+
+Every request gets an `X-Request-ID`; pass your own or use the generated response header to filter correlated logs. Kite broker request/response metadata is logged at `debug` level with sensitive fields redacted.
+
+## Configuration Notes
 
 To restrict order entry to specific instruments, prefer a JSON watchlist file:
 
@@ -65,41 +235,11 @@ You can also use `"products": ["MIS", "NRML"]` to show the same instrument for m
 export SYMBOL_WATCHLIST=NSE:INFY:MIS,MCX:SILVERM26JUNFUT:MIS
 ```
 
-Keep futures symbols updated as contracts expire. When a watchlist is configured, `ENFORCE_SYMBOL_WATCHLIST=true` rejects direct API order creation for symbols/products outside the file or the synced Kite instrument master. Set it to `false` only for broad paper testing.
-
-For F&O option chains, use Kite's instrument master instead of manually adding every contract:
-
-```bash
-curl -X POST "http://localhost:8080/instruments/sync?exchange=NFO"
-curl "http://localhost:8080/instruments/expiries?exchange=NFO&underlying=NIFTY"
-curl "http://localhost:8080/instruments/options?exchange=NFO&underlying=NIFTY&range_points=1000&contracts_each_side=10"
-```
-
-The New Trade drawer has an Options section that can sync `NFO` or `BFO`, list underlyings/expiries, and load contracts around ATM or a manual center strike. If LTP is unavailable, the backend falls back to a median strike so the dropdown still works. Option lot sizes are enforced in the UI and backend; quantities must be multiples of the contract lot size.
-
-For LIMIT orders, the UI can fill the limit price with `GET /market/ltp`. This requires Kite quote/LTP permission; if Kite returns `Insufficient permission for that call`, enable the required market-data permission for the app/account or enter the price manually.
+When a watchlist is configured, `ENFORCE_SYMBOL_WATCHLIST=true` rejects direct API order creation for symbols/products outside the file or the synced Kite instrument master. Set it to `false` only for broad paper testing.
 
 Set `REQUIRE_ORDER_PROTECTION=true` when you want every new order request to include a `protection` block with both SL and target points. Defaults fill zero values inside the block, but the caller must intentionally request protection.
 
-Trades, synced orderbook snapshots, and synced position snapshots are persisted date-wise by default, for example `data/trades_24_05_2026.json`, `data/orders_24_05_2026.json`, and `data/positions_24_05_2026.json`, so local trade ids and the latest sync survive server restarts on the same trading day. Override the directory or exact trade file with:
-
-```bash
-export TRADE_STORE_PATH=/path/to/trading-data
-# or
-export TRADE_STORE_PATH=/path/to/trades_24_05_2026.json
-```
-
-See [.env.example](.env.example) for runtime configuration defaults and [docs/api.md](docs/api.md) for API examples.
-
-Logs are emitted as structured JSON to stdout. Set `LOG_LEVEL=debug|info|warn|error`.
-
-Warning and error logs are also written to `ERROR_LOG_PATH` (`data/error.log` by default). That file is truncated every time the server starts, so it contains only the current run's actionable failures. Expected validation rejects and Kite `InputException` order rejects stay in stdout with request ids, but are not copied into the error file.
-
-Every request gets an `X-Request-ID`; pass your own or use the generated response header to filter correlated logs. Kite broker request/response metadata is logged at `debug` level with sensitive fields redacted.
-
-Orders created by this service are sent to Kite with tag `TSLOCAL`. This will be used by the sync engine to distinguish local-system orders from Kite app/manual orders.
-
-Use `POST /sync/kite` to fetch the latest Kite orderbook and net positions, then `GET /orders` and `GET /positions` to view synced snapshots. Set `SYNC_POLL_SECONDS` to a positive value to enable automatic background sync; it is disabled by default with `0`.
+Orders created by this service are sent to Kite with tag `TSLOCAL`. This is used by the sync engine to distinguish local-system orders from Kite app/manual orders.
 
 ## Create a trade
 
@@ -292,42 +432,15 @@ Position manually flattened in Kite     -> cancel remaining exits and close trad
 
 Position reconciliation uses Kite net positions for the trade's exchange, symbol, and product.
 
-## Use Kite
+## Kite Operational Notes
 
-For local development, set this as the redirect URL in the Kite developer console:
-
-```text
-http://127.0.0.1:8080/kite/callback
-```
-
-You do not need a public server for this login flow. Kite will redirect your browser back to your local machine after login.
-
-Set these env vars before starting:
-
-```bash
-export KITE_API_KEY=your_api_key
-export KITE_API_SECRET=your_api_secret
-export POLL_SECONDS=5
-go run ./cmd/server
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8080/kite/login
-```
-
-After Zerodha login, the browser returns to `/kite/callback`, exchanges the `request_token`, and prints the `access_token`.
-
-For live order placement, restart with:
-
-```bash
-export BROKER=kite
-export KITE_API_KEY=your_api_key
-export KITE_API_SECRET=your_api_secret
-export KITE_ACCESS_TOKEN=access_token_from_callback
-go run ./cmd/server
-```
+- Use the Quick Start section for the full Kite setup flow.
+- Redirect URL for local development is `http://127.0.0.1:8080/kite/callback`.
+- Generate a fresh `KITE_ACCESS_TOKEN` through `/kite/login` when the token expires, usually daily.
+- Live order placement requires your current public IP in Kite developer console's allowed IP list.
+- If your ISP IP changes often, use a VPS/static IPv4 or VPN/tunnel through a static-IP server.
+- LTP/quote endpoints require Kite market-data permission; otherwise enter LIMIT prices manually.
+- F&O contract dropdowns require `POST /instruments/sync?exchange=NFO` or `BFO` after Kite credentials are configured.
 
 ## Notes
 
