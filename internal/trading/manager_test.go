@@ -12,18 +12,20 @@ import (
 )
 
 type fakeBroker struct {
-	nextID      int
-	orders      map[string]Order
-	synced      []KiteOrder
-	status      map[string]string
-	positions   []Position
-	placeCount  int
-	modifyCount int
-	cancelCount int
-	ltp         float64
-	placeErr    error
-	cancelErr   error
-	operations  []string
+	nextID        int
+	orders        map[string]Order
+	synced        []KiteOrder
+	status        map[string]string
+	positions     []Position
+	placeCount    int
+	modifyCount   int
+	cancelCount   int
+	ltp           float64
+	placeErr      error
+	cancelErr     error
+	operations    []string
+	ltps          map[string]float64
+	ltpBatchCalls int
 }
 
 func newFakeBroker() *fakeBroker {
@@ -160,6 +162,27 @@ func (f *fakeBroker) LTP(_ context.Context, _, _ string) (float64, error) {
 	return f.ltp, nil
 }
 
+func (f *fakeBroker) LTPBatch(_ context.Context, instruments []InstrumentRef) (map[string]MarketQuote, error) {
+	f.ltpBatchCalls++
+	now := time.Now().UTC()
+	out := make(map[string]MarketQuote, len(instruments))
+	for _, instrument := range instruments {
+		exchange := strings.ToUpper(instrument.Exchange)
+		symbol := strings.ToUpper(instrument.TradingSymbol)
+		price := f.ltp
+		if f.ltps != nil && f.ltps[marketQuoteKey(exchange, symbol)] > 0 {
+			price = f.ltps[marketQuoteKey(exchange, symbol)]
+		}
+		out[marketQuoteKey(exchange, symbol)] = MarketQuote{
+			Exchange:      exchange,
+			TradingSymbol: symbol,
+			LastPrice:     price,
+			SyncedAt:      now,
+		}
+	}
+	return out, nil
+}
+
 func TestEnterWithOnlyTargetPlacesTarget(t *testing.T) {
 	broker := newFakeBroker()
 	manager := NewManager(broker)
@@ -237,6 +260,72 @@ func TestListGroupsAggregatesOpenSameSideTrades(t *testing.T) {
 	}
 	if len(group.TradeIDs) != 2 || group.TradeIDs[0] != first.ID || group.TradeIDs[1] != second.ID {
 		t.Fatalf("unexpected trade ids: %+v", group.TradeIDs)
+	}
+}
+
+func TestListGroupsWithMarketAddsBuyPnLFromBatchedLTP(t *testing.T) {
+	broker := newFakeBroker()
+	broker.ltps = map[string]float64{"NSE:INFY": 110}
+	manager := NewManager(broker)
+
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "BUY",
+		Quantity:      2,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := manager.ListGroupsWithMarket(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker.ltpBatchCalls != 1 {
+		t.Fatalf("expected one batch LTP call, got %d", broker.ltpBatchCalls)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("expected one group, got %d", len(groups))
+	}
+	if groups[0].LastPrice != 110 {
+		t.Fatalf("expected ltp 110, got %v", groups[0].LastPrice)
+	}
+	if groups[0].UnrealizedPnL != 20 {
+		t.Fatalf("expected pnl 20, got %v", groups[0].UnrealizedPnL)
+	}
+	if groups[0].PnLPercent != 10 {
+		t.Fatalf("expected pnl percent 10, got %v", groups[0].PnLPercent)
+	}
+}
+
+func TestListGroupsWithMarketAddsSellPnLFromBatchedLTP(t *testing.T) {
+	broker := newFakeBroker()
+	broker.ltps = map[string]float64{"NSE:INFY": 90}
+	manager := NewManager(broker)
+
+	if _, err := manager.Import(context.Background(), ImportTradeRequest{
+		ID:            "t1",
+		Exchange:      "NSE",
+		TradingSymbol: "INFY",
+		Side:          "SELL",
+		Quantity:      3,
+		Product:       "MIS",
+		EntryPrice:    100,
+		EntryOrderID:  "kite-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := manager.ListGroupsWithMarket(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groups[0].UnrealizedPnL != 30 {
+		t.Fatalf("expected sell pnl 30, got %v", groups[0].UnrealizedPnL)
 	}
 }
 

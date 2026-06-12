@@ -130,6 +130,9 @@ func (a *Adapter) Positions(ctx context.Context) ([]trading.Position, error) {
 			TradingSymbol: position.TradingSymbol,
 			Product:       position.Product,
 			Quantity:      position.Quantity,
+			AveragePrice:  position.AveragePrice,
+			LastPrice:     position.LastPrice,
+			PnL:           position.PnL,
 		})
 	}
 	return out, nil
@@ -137,4 +140,8 @@ func (a *Adapter) Positions(ctx context.Context) ([]trading.Position, error) {
 
 func (a *Adapter) LTP(ctx context.Context, exchange, symbol string) (float64, error) {
 	return a.client.LTP(ctx, exchange, symbol)
+}
+
+func (a *Adapter) LTPBatch(ctx context.Context, instruments []trading.InstrumentRef) (map[string]trading.MarketQuote, error) {
+	return a.client.LTPBatch(ctx, instruments)
 }

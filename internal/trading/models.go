@@ -16,6 +16,22 @@ type Broker interface {
 	LTP(ctx context.Context, exchange, symbol string) (float64, error)
 }
 
+type BatchLTPBroker interface {
+	LTPBatch(ctx context.Context, instruments []InstrumentRef) (map[string]MarketQuote, error)
+}
+
+type InstrumentRef struct {
+	Exchange      string `json:"exchange"`
+	TradingSymbol string `json:"tradingsymbol"`
+}
+
+type MarketQuote struct {
+	Exchange      string    `json:"exchange"`
+	TradingSymbol string    `json:"tradingsymbol"`
+	LastPrice     float64   `json:"last_price"`
+	SyncedAt      time.Time `json:"synced_at"`
+}
+
 type Order struct {
 	Exchange         string  `json:"exchange"`
 	TradingSymbol    string  `json:"tradingsymbol"`
@@ -45,6 +61,9 @@ type Position struct {
 	TradingSymbol string
 	Product       string
 	Quantity      int
+	AveragePrice  float64
+	LastPrice     float64
+	PnL           float64
 }
 
 type KitePosition struct {
@@ -52,6 +71,9 @@ type KitePosition struct {
 	TradingSymbol string    `json:"tradingsymbol"`
 	Product       string    `json:"product"`
 	Quantity      int       `json:"quantity"`
+	AveragePrice  float64   `json:"average_price,omitempty"`
+	LastPrice     float64   `json:"last_price,omitempty"`
+	PnL           float64   `json:"pnl,omitempty"`
 	SyncedAt      time.Time `json:"synced_at"`
 }
 
@@ -138,6 +160,10 @@ type PositionGroup struct {
 	LocalQuantity        int       `json:"local_quantity,omitempty"`
 	BrokerQuantity       int       `json:"broker_quantity,omitempty"`
 	AverageEntryPrice    float64   `json:"average_entry_price,omitempty"`
+	LastPrice            float64   `json:"last_price,omitempty"`
+	UnrealizedPnL        float64   `json:"unrealized_pnl,omitempty"`
+	PnLPercent           float64   `json:"pnl_percent,omitempty"`
+	MarketSyncedAt       time.Time `json:"market_synced_at,omitempty"`
 	TradeIDs             []string  `json:"trade_ids"`
 	TradeStatus          string    `json:"trade_status"`
 	CreationSource       string    `json:"creation_source"`

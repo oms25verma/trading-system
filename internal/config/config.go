@@ -90,7 +90,7 @@ func Load() Config {
 		DefaultStopLossPoints:   floatEnv("DEFAULT_STOP_LOSS_POINTS", 0),
 		DefaultTargetPoints:     floatEnv("DEFAULT_TARGET_POINTS", 0),
 		DefaultSLLimitOffset:    floatEnv("DEFAULT_SL_LIMIT_OFFSET", 0),
-		EnforceSymbolWatchlist:  boolEnv("ENFORCE_SYMBOL_WATCHLIST", true),
+		EnforceSymbolWatchlist:  boolEnv("ENFORCE_SYMBOL_WATCHLIST", false),
 		RequireOrderProtection:  boolEnv("REQUIRE_ORDER_PROTECTION", false),
 		LogLevel:                stringEnv("LOG_LEVEL", "info"),
 		ErrorLogPath:            stringEnv("ERROR_LOG_PATH", "data/error.log"),

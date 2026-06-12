@@ -142,6 +142,32 @@ func (p *PaperBroker) LTP(_ context.Context, exchange, symbol string) (float64, 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	return p.nextLTP(exchange, symbol), nil
+}
+
+func (p *PaperBroker) LTPBatch(_ context.Context, instruments []InstrumentRef) (map[string]MarketQuote, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now().UTC()
+	quotes := make(map[string]MarketQuote, len(instruments))
+	for _, instrument := range instruments {
+		exchange := strings.ToUpper(strings.TrimSpace(instrument.Exchange))
+		symbol := strings.ToUpper(strings.TrimSpace(instrument.TradingSymbol))
+		if exchange == "" || symbol == "" {
+			continue
+		}
+		quotes[key(exchange, symbol)] = MarketQuote{
+			Exchange:      exchange,
+			TradingSymbol: symbol,
+			LastPrice:     p.nextLTP(exchange, symbol),
+			SyncedAt:      now,
+		}
+	}
+	return quotes, nil
+}
+
+func (p *PaperBroker) nextLTP(exchange, symbol string) float64 {
 	k := key(exchange, symbol)
 	price := p.ltp[k]
 	if price == 0 {
@@ -149,7 +175,7 @@ func (p *PaperBroker) LTP(_ context.Context, exchange, symbol string) (float64, 
 	}
 	price += float64(time.Now().UnixNano()%7-3) * 0.10
 	p.ltp[k] = price
-	return price, nil
+	return price
 }
 
 func key(exchange, symbol string) string {

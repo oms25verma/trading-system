@@ -259,6 +259,18 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		position, err := manager.GetSyncedPosition(r.PathValue("id"))
 		writeResult(r.Context(), w, position, err)
 	})
+	mux.HandleFunc("GET /positions/live", func(w http.ResponseWriter, r *http.Request) {
+		if broker == nil {
+			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "broker_unavailable", Message: "broker is not available for live positions"})
+			return
+		}
+		positions, err := broker.Positions(r.Context())
+		if err != nil {
+			writeError(r.Context(), w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, liveKitePositions(positions))
+	})
 	mux.HandleFunc("POST /sync/kite", func(w http.ResponseWriter, r *http.Request) {
 		result, err := manager.SyncKite(r.Context())
 		writeResult(r.Context(), w, result, err)
@@ -297,6 +309,18 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 			"tradingsymbol": symbol,
 			"last_price":    price,
 		}, err)
+	})
+	mux.HandleFunc("GET /market/groups", func(w http.ResponseWriter, r *http.Request) {
+		groups, err := manager.ListGroupsWithMarket(r.Context())
+		if err != nil {
+			writeError(r.Context(), w, err)
+			return
+		}
+		if !hasListQuery(r) {
+			writeJSON(w, http.StatusOK, groups)
+			return
+		}
+		writePagedResult(r.Context(), w, r, filterGroups(groups, r))
 	})
 	mux.HandleFunc("GET /kite/login", func(w http.ResponseWriter, r *http.Request) {
 		loginURL, err := kiteClient.LoginURL()
@@ -474,13 +498,8 @@ func applyCreateDefaults(req *trading.CreateTradeRequest, cfg config.Config) {
 }
 
 func validateCreateTradeConfig(req trading.CreateTradeRequest, cfg config.Config, instrumentService *instruments.Service) error {
-	if cfg.EnforceSymbolWatchlist && len(cfg.SymbolWatchlist) > 0 && !watchlistAllows(req, cfg.SymbolWatchlist) && !instrumentService.Allows(req.Exchange, req.TradingSymbol) {
-		return &trading.DomainError{
-			Kind:    trading.ErrorKindValidation,
-			Code:    "symbol_not_allowed",
-			Message: "symbol/product is not in SYMBOL_WATCHLIST or synced Kite instruments; update config/symbols.json, run instruments sync, or disable ENFORCE_SYMBOL_WATCHLIST for broad testing",
-		}
-	}
+	// Watchlist enforcement is intentionally disabled for now. Dynamic Kite instrument
+	// master selection is the primary order-entry path while the UI is option-heavy.
 	if cfg.RequireOrderProtection {
 		if req.Protection == nil || req.Protection.StopLossPoints <= 0 || req.Protection.TargetPoints <= 0 {
 			return &trading.DomainError{
@@ -565,6 +584,24 @@ func watchlistAllows(req trading.CreateTradeRequest, items []config.SymbolWatchI
 		}
 	}
 	return false
+}
+
+func liveKitePositions(positions []trading.Position) []*trading.KitePosition {
+	now := time.Now().UTC()
+	out := make([]*trading.KitePosition, 0, len(positions))
+	for _, position := range positions {
+		out = append(out, &trading.KitePosition{
+			Exchange:      strings.ToUpper(position.Exchange),
+			TradingSymbol: strings.ToUpper(position.TradingSymbol),
+			Product:       strings.ToUpper(position.Product),
+			Quantity:      position.Quantity,
+			AveragePrice:  position.AveragePrice,
+			LastPrice:     position.LastPrice,
+			PnL:           position.PnL,
+			SyncedAt:      now,
+		})
+	}
+	return out
 }
 
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {

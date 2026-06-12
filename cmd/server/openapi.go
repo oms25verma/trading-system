@@ -128,7 +128,7 @@ func responseSchema(method, path string) string {
 		return "ManagedTradeList"
 	case strings.HasPrefix(path, "/trades"):
 		return "ManagedTrade"
-	case path == "/groups" || path == "/conflicts":
+	case path == "/groups" || path == "/conflicts" || path == "/market/groups":
 		return "PositionGroupList"
 	case path == "/groups/{id}":
 		return "PositionGroup"
@@ -141,6 +141,8 @@ func responseSchema(method, path string) string {
 	case path == "/orders/{id}/cancel":
 		return "OrderCancelResult"
 	case path == "/positions" && method == "GET":
+		return "KitePositionList"
+	case path == "/positions/live":
 		return "KitePositionList"
 	case path == "/positions/{id}":
 		return "KitePosition"
@@ -238,6 +240,10 @@ func componentSchemas() map[string]any {
 			"local_quantity":         integerSchema(),
 			"broker_quantity":        integerSchema(),
 			"average_entry_price":    numberSchema(),
+			"last_price":             numberSchema(),
+			"unrealized_pnl":         numberSchema(),
+			"pnl_percent":            numberSchema(),
+			"market_synced_at":       dateTimeSchema(),
 			"trade_ids":              arraySchema(map[string]string{"type": "string"}),
 			"trade_status":           stringSchema(),
 			"creation_source":        stringSchema(),
@@ -282,6 +288,9 @@ func componentSchemas() map[string]any {
 			"tradingsymbol": stringSchema(),
 			"product":       stringSchema(),
 			"quantity":      integerSchema(),
+			"average_price": numberSchema(),
+			"last_price":    numberSchema(),
+			"pnl":           numberSchema(),
 			"synced_at":     dateTimeSchema(),
 		}),
 		"SyncResult": objectSchema(nil, map[string]any{

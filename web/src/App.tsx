@@ -28,6 +28,7 @@ import type {
   DashboardSummary,
   KiteOrder,
   KitePosition,
+  LTPResponse,
   ManagedTrade,
   Metadata,
   OptionContract,
@@ -38,9 +39,19 @@ import type {
 } from './types';
 
 type View = 'dashboard' | 'groups' | 'orders' | 'trades' | 'conflicts';
+type PositionTab = 'active' | 'closed' | 'unmanaged' | 'conflicts';
 type SelectOption = string | { value: string; label: string };
 type TableState = { page: number; pageSize: number; status: string; symbol: string };
 type PageResult<T> = { items: T[]; page: number; totalPages: number; total: number };
+type RiskPreviewData = {
+  referencePrice: number;
+  stopTrigger: number;
+  stopLimit: number;
+  targetPrice: number;
+  riskAmount: number;
+  rewardAmount: number;
+  riskReward: number;
+};
 type Action =
   | { type: 'create-trade' }
   | { type: 'stop-loss'; trade?: ManagedTrade; group?: PositionGroup }
@@ -67,6 +78,9 @@ const emptySnapshot: Snapshot = {
   positions: [],
 };
 
+const MARKET_REFRESH_MS = 5000;
+const DEFAULT_OPTION_RANGE_POINTS = 1000;
+
 export function App() {
   const [view, setView] = useState<View>('dashboard');
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
@@ -76,6 +90,7 @@ export function App() {
   const [error, setError] = useState('');
   const [action, setAction] = useState<Action | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState('');
+  const [liveRefresh, setLiveRefresh] = useState(true);
 
   async function load(options?: { silent?: boolean }) {
     if (!options?.silent) setLoading(true);
@@ -84,13 +99,13 @@ export function App() {
       const [metadata, dashboard, groups, conflicts, orders, trades, positions] = await Promise.all([
         api.metadata(),
         api.dashboard(),
-        api.groups(),
+        api.marketGroups().catch(() => api.groups()),
         api.conflicts(),
         api.orders(),
         api.trades(),
-        api.positions(),
+        api.livePositions().catch(() => api.positions()),
       ]);
-      setSnapshot({ metadata, dashboard, groups, conflicts, orders, trades, positions });
+      setSnapshot({ metadata, dashboard, groups: mergeLivePositionsIntoGroups(groups, positions), conflicts, orders, trades, positions });
       const latestSync = latestSyncedAt(orders, positions);
       if (latestSync) setLastSyncedAt(latestSync);
     } catch (err) {
@@ -103,6 +118,14 @@ export function App() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!liveRefresh) return;
+    const id = window.setInterval(() => {
+      void load({ silent: true });
+    }, MARKET_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [liveRefresh]);
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label);
@@ -182,6 +205,10 @@ export function App() {
           </div>
           <div className="status-stack">
             <StatusPill value={snapshot.dashboard?.risk_status ?? 'OK'} />
+            <button className={`icon-text-button compact ${liveRefresh ? 'active' : ''}`} onClick={() => setLiveRefresh(!liveRefresh)}>
+              <Activity />
+              {liveRefresh ? 'Live' : 'Paused'}
+            </button>
             <button className="icon-button" onClick={() => void load()} title="Refresh" aria-label="Refresh">
               {loading ? <Loader2 className="spin" /> : <RefreshCw />}
             </button>
@@ -205,6 +232,8 @@ export function App() {
             {view === 'groups' && (
               <GroupsView
                 groups={snapshot.groups}
+                trades={snapshot.trades}
+                orders={snapshot.orders}
                 onStopLoss={(group) => setAction({ type: 'stop-loss', group })}
                 onTarget={(group) => setAction({ type: 'target', group })}
                 onExit={(group) => confirmRun(`Exit ${group.tradingsymbol} now?`, 'Exited group', () => api.exitGroup(group.id))}
@@ -310,6 +339,8 @@ function DashboardView(props: { snapshot: Snapshot; onCreate: () => void; onView
 
 function GroupsView(props: {
   groups: PositionGroup[];
+  trades: ManagedTrade[];
+  orders: KiteOrder[];
   onStopLoss: (group: PositionGroup) => void;
   onTarget: (group: PositionGroup) => void;
   onExit: (group: PositionGroup) => void;
@@ -323,15 +354,48 @@ function GroupsView(props: {
   onDetails: (group: PositionGroup) => void;
 }) {
   const [table, setTable] = useState<TableState>({ page: 1, pageSize: 25, status: '', symbol: '' });
-  const groups = useMemo(() => props.groups.filter((group) => matchesTableFilter(group, table)), [props.groups, table]);
-  const page = pageItems(groups, table);
+  const [tab, setTab] = useState<PositionTab>('active');
+  const closedTrades = useMemo(() => props.trades.filter((trade) => trade.trade_status === 'CLOSED'), [props.trades]);
+  const visibleGroups = useMemo(() => props.groups.filter((group) => {
+    if (tab === 'active') return group.management_status !== 'CONFLICT';
+    if (tab === 'unmanaged') return group.management_status === 'UNMANAGED';
+    if (tab === 'conflicts') return groupNeedsAttentionUI(group);
+    return false;
+  }).filter((group) => matchesTableFilter(group, table)), [props.groups, table, tab]);
+  const visibleClosedTrades = useMemo(() => closedTrades.filter((trade) => matchesTableFilter(trade, table)), [closedTrades, table]);
+  const groupPage = pageItems(visibleGroups, table);
+  const closedPage = pageItems(visibleClosedTrades, table);
+  const openPnL = props.groups.reduce((sum, group) => sum + (group.unrealized_pnl ?? 0), 0);
+  const closedPnL = closedTrades.reduce((sum, trade) => sum + (closedTradePnL(trade, props.orders) ?? 0), 0);
 
   return (
     <section className="table-section">
       <PanelTitle icon={<Activity />} title="Position Groups" />
-      <TableControls state={table} total={groups.length} onChange={setTable} statusOptions={['', 'MANAGED', 'UNMANAGED', 'PARTIALLY_MANAGED', 'CONFLICT']} />
-      <GroupTable groups={page.items} actions={props} />
-      <Pager page={page} state={table} onChange={setTable} />
+      <div className="pnl-strip">
+        <PnLTile label="Open P&L" value={openPnL} />
+        <PnLTile label="Closed P&L" value={closedPnL} />
+        <PnLTile label="Net P&L" value={openPnL + closedPnL} />
+      </div>
+      <div className="tab-row">
+        <TabButton label="Active" active={tab === 'active'} count={props.groups.filter((group) => group.management_status !== 'CONFLICT').length} onClick={() => setTab('active')} />
+        <TabButton label="Closed" active={tab === 'closed'} count={closedTrades.length} onClick={() => setTab('closed')} />
+        <TabButton label="Unmanaged" active={tab === 'unmanaged'} count={props.groups.filter((group) => group.management_status === 'UNMANAGED').length} onClick={() => setTab('unmanaged')} />
+        <TabButton label="Conflicts" active={tab === 'conflicts'} count={props.groups.filter(groupNeedsAttentionUI).length} onClick={() => setTab('conflicts')} />
+      </div>
+      <TableControls state={table} total={tab === 'closed' ? closedPage.total : groupPage.total} onChange={setTable} statusOptions={tab === 'closed' ? ['', 'OPEN', 'CLOSED'] : ['', 'MANAGED', 'UNMANAGED', 'PARTIALLY_MANAGED', 'CONFLICT']} />
+      {tab === 'closed' ? (
+        <>
+          <ClosedTradeTable trades={closedPage.items} orders={props.orders} />
+          <Pager page={closedPage} state={table} onChange={setTable} />
+          {closedPage.total === 0 && <EmptyState label="No closed trades" />}
+        </>
+      ) : (
+        <>
+          <GroupTable groups={groupPage.items} actions={props} />
+          <Pager page={groupPage} state={table} onChange={setTable} />
+          {groupPage.total === 0 && <EmptyState label="No positions" />}
+        </>
+      )}
     </section>
   );
 }
@@ -526,6 +590,8 @@ function GroupTable(props: {
             <th>Side</th>
             <th>Qty</th>
             <th>Avg Entry</th>
+            <th>LTP</th>
+            <th>P&L</th>
             <th>SL</th>
             <th>Target</th>
             <th>Local/Broker</th>
@@ -544,6 +610,8 @@ function GroupTable(props: {
               <td>{group.side ? <SidePill side={group.side} /> : '-'}</td>
               <td>{group.quantity}</td>
               <td>{money(group.average_entry_price)}</td>
+              <td>{money(group.last_price)}</td>
+              <td><PnLValue value={group.last_price ? group.unrealized_pnl ?? 0 : undefined} /></td>
               <td>{groupProtectionLabel(group, 'stop-loss')}</td>
               <td>{groupProtectionLabel(group, 'target')}</td>
               <td>{group.local_quantity ?? 0}/{group.broker_quantity ?? 0}</td>
@@ -678,15 +746,12 @@ function DetailGrid(props: { rows: Array<[string, React.ReactNode]> }) {
 
 function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn: () => Promise<unknown>) => Promise<void> }) {
   const defaults = props.metadata?.runtime;
-  const watchlist = defaults?.symbol_watchlist ?? [];
-  const firstSymbol = watchlist[0];
-  const [selectedSymbol, setSelectedSymbol] = useState(firstSymbol ? symbolKey(firstSymbol) : '');
   const [form, setForm] = useState<CreateTradeRequest>({
-    exchange: firstSymbol?.exchange ?? 'NSE',
-    tradingsymbol: firstSymbol?.tradingsymbol ?? '',
+    exchange: 'NFO',
+    tradingsymbol: '',
     side: 'BUY',
-    quantity: firstSymbol?.default_quantity || defaults?.default_quantity || 1,
-    product: firstSymbol?.product ?? defaults?.default_product ?? 'MIS',
+    quantity: defaults?.default_quantity || 1,
+    product: defaults?.default_product ?? 'MIS',
     order_type: 'MARKET',
     market_protection: defaults?.default_market_protection,
     protection: {
@@ -703,15 +768,17 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   const [expiries, setExpiries] = useState<string[]>([]);
   const [expiry, setExpiry] = useState('');
   const [optionType, setOptionType] = useState('BOTH');
-  const [centerStrike, setCenterStrike] = useState('');
-  const [rangePoints, setRangePoints] = useState(1000);
   const [contractsEachSide, setContractsEachSide] = useState(10);
   const [options, setOptions] = useState<OptionContract[]>([]);
   const [selectedOption, setSelectedOption] = useState('');
-  const [selectedLotSize, setSelectedLotSize] = useState(firstSymbol?.lot_size ?? 0);
+  const [selectedLotSize, setSelectedLotSize] = useState(0);
   const [optionStatus, setOptionStatus] = useState('');
   const [optionLoading, setOptionLoading] = useState(false);
   const [ltpLoading, setLTPLoading] = useState(false);
+  const [underlyingQuote, setUnderlyingQuote] = useState<LTPResponse | null>(null);
+  const [underlyingQuoteError, setUnderlyingQuoteError] = useState('');
+  const effectiveWithProtection = withProtection || !!defaults?.require_order_protection;
+  const protectionPreview = riskPreview(form, effectiveWithProtection);
 
   useEffect(() => {
     void loadOptionUnderlyings(optionExchange, false);
@@ -721,11 +788,15 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     if (underlying) void loadOptionExpiries(optionExchange, underlying);
   }, [optionExchange, underlying]);
 
+  useEffect(() => {
+    if (underlying) void loadUnderlyingQuote();
+  }, [optionExchange, underlying]);
+
   function submit() {
     const body = { ...form, tradingsymbol: form.tradingsymbol.trim().toUpperCase() };
-    if (!withProtection) delete body.protection;
+    if (!effectiveWithProtection) delete body.protection;
     if (body.order_type === 'MARKET') delete body.price;
-    const validationError = validateCreateTradeForm(body, withProtection, selectedLotSize);
+    const validationError = validateCreateTradeForm(body, effectiveWithProtection, selectedLotSize);
     if (validationError) {
       setFormError(validationError);
       return;
@@ -734,18 +805,60 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     return props.onRun('Created trade', () => api.createTrade(body));
   }
 
-  function selectSymbol(value: string) {
-    setSelectedSymbol(value);
-    const item = watchlist.find((symbol) => symbolKey(symbol) === value);
-    if (!item) return;
-    setForm({
-      ...form,
-      exchange: item.exchange,
-      tradingsymbol: item.tradingsymbol,
-      product: item.product,
-      quantity: item.default_quantity || form.quantity,
-    });
-    setSelectedLotSize(item.lot_size ?? 0);
+  function defaultProtection() {
+    return {
+      stop_loss_points: defaults?.default_stop_loss_points || undefined,
+      target_points: defaults?.default_target_points || undefined,
+      sl_limit_offset: defaults?.default_sl_limit_offset || undefined,
+    };
+  }
+
+  function resetOptionSelection(exchange = optionExchange) {
+    setOptions([]);
+    setSelectedOption('');
+    setSelectedLotSize(0);
+    setFormError('');
+    setOptionStatus('');
+    setForm((current) => ({
+      ...current,
+      exchange,
+      tradingsymbol: '',
+      quantity: defaults?.default_quantity || 1,
+      product: defaults?.default_product ?? 'MIS',
+      order_type: 'MARKET',
+      price: undefined,
+      market_protection: defaults?.default_market_protection,
+      protection: defaultProtection(),
+    }));
+  }
+
+  function changeOptionExchange(value: string) {
+    setOptionExchange(value);
+    setUnderlyingQuote(null);
+    setUnderlyingQuoteError('');
+    setUnderlyings([]);
+    setExpiries([]);
+    setExpiry('');
+    resetOptionSelection(value);
+  }
+
+  function changeUnderlying(value: string) {
+    setUnderlying(value);
+    setUnderlyingQuote(null);
+    setUnderlyingQuoteError('');
+    setExpiries([]);
+    setExpiry('');
+    resetOptionSelection(optionExchange);
+  }
+
+  function changeExpiry(value: string) {
+    setExpiry(value);
+    resetOptionSelection(optionExchange);
+  }
+
+  function changeOptionType(value: string) {
+    setOptionType(value);
+    resetOptionSelection(optionExchange);
   }
 
   async function syncOptionInstruments() {
@@ -792,9 +905,8 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         underlying,
         expiry,
         types: optionType === 'BOTH' ? 'CE,PE' : optionType,
-        range_points: rangePoints,
+        range_points: DEFAULT_OPTION_RANGE_POINTS,
         contracts_each_side: contractsEachSide,
-        center_strike: centerStrike ? Number(centerStrike) : undefined,
         product: defaults?.default_product ?? 'MIS',
       });
       setOptions(result.contracts);
@@ -809,6 +921,23 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     }
   }
 
+  async function loadUnderlyingQuote() {
+    const instrument = underlyingQuoteInstrument(optionExchange, underlying);
+    if (!instrument) {
+      setUnderlyingQuote(null);
+      setUnderlyingQuoteError('Spot LTP unavailable');
+      return;
+    }
+    setUnderlyingQuoteError('');
+    try {
+      const quote = await api.ltp(instrument.exchange, instrument.symbol);
+      setUnderlyingQuote(quote);
+    } catch (err) {
+      setUnderlyingQuote(null);
+      setUnderlyingQuoteError(errorMessage(err));
+    }
+  }
+
   function selectOption(value: string) {
     setSelectedOption(value);
     const contract = options.find((item) => item.tradingsymbol === value);
@@ -816,29 +945,60 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
   }
 
   function selectOptionContract(contract: OptionContract) {
-    setForm({
-      ...form,
+    setForm((current) => ({
+      ...current,
       exchange: contract.exchange,
       tradingsymbol: contract.tradingsymbol,
       product: contract.product || defaults?.default_product || 'MIS',
-      quantity: contract.default_quantity || contract.lot_size || form.quantity,
-    });
+      quantity: contract.default_quantity || contract.lot_size || current.quantity,
+      order_type: 'MARKET',
+      price: undefined,
+      market_protection: defaults?.default_market_protection,
+      protection: defaultProtection(),
+    }));
     setSelectedLotSize(contract.lot_size || 0);
+    setFormError('');
+    void fetchEntryLTP(contract.exchange, contract.tradingsymbol, false);
   }
 
-  async function useLTP() {
+  function applyProtectionPreset(stopLossPoints: number, targetPoints: number) {
+    setForm({
+      ...form,
+      protection: {
+        ...form.protection,
+        stop_loss_points: stopLossPoints,
+        target_points: targetPoints,
+        sl_limit_offset: form.protection?.sl_limit_offset ?? defaults?.default_sl_limit_offset,
+      },
+    });
+    setWithProtection(true);
+  }
+
+  function changeOrderType(orderType: string) {
+    setForm((current) => ({
+      ...current,
+      order_type: orderType,
+      price: orderType === 'MARKET' ? undefined : current.price,
+    }));
+    if (orderType === 'LIMIT' && form.exchange && form.tradingsymbol) {
+      void fetchEntryLTP(form.exchange, form.tradingsymbol, true);
+    }
+  }
+
+  async function fetchEntryLTP(exchange = form.exchange, symbol = form.tradingsymbol, updateLimitPrice = false) {
+    if (!exchange || !symbol) return;
     setLTPLoading(true);
     setFormError('');
     try {
-      const result = await api.ltp(form.exchange, form.tradingsymbol);
-      setForm({
-        ...form,
-        price: result.last_price,
+      const result = await api.ltp(exchange, symbol);
+      setForm((current) => ({
+        ...current,
+        price: updateLimitPrice ? result.last_price : current.price,
         protection: {
-          ...form.protection,
-          reference_price: form.protection?.reference_price || result.last_price,
+          ...current.protection,
+          reference_price: result.last_price,
         },
-      });
+      }));
     } catch (err) {
       setFormError(errorMessage(err));
     } finally {
@@ -846,21 +1006,12 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
     }
   }
 
+  function useLTP(exchange = form.exchange, symbol = form.tradingsymbol) {
+    return fetchEntryLTP(exchange, symbol, true);
+  }
+
   return (
     <FormShell onSubmit={submit}>
-      {watchlist.length > 0 ? (
-        <Select
-          label="Watchlist Symbol"
-          value={selectedSymbol}
-          options={watchlist.map((symbol) => ({ value: symbolKey(symbol), label: symbolLabel(symbol) }))}
-          onChange={selectSymbol}
-        />
-      ) : (
-        <>
-          <Input label="Exchange" value={form.exchange} onChange={(exchange) => setForm({ ...form, exchange: exchange.toUpperCase() })} />
-          <Input label="Symbol" value={form.tradingsymbol} onChange={(tradingsymbol) => setForm({ ...form, tradingsymbol })} />
-        </>
-      )}
       <div className="instrument-box">
         <div className="instrument-head">
           <strong>Options</strong>
@@ -869,13 +1020,15 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
           </button>
         </div>
         <div className="form-grid two">
-          <Select label="Exchange" value={optionExchange} options={['NFO', 'BFO']} onChange={setOptionExchange} />
-          <Select label="Underlying" value={underlying} options={underlyings.length ? underlyings : ['NIFTY']} onChange={setUnderlying} />
-          <Select label="Expiry" value={expiry} options={expiries.length ? expiries : ['']} onChange={setExpiry} />
-          <Select label="Type" value={optionType} options={['BOTH', 'CE', 'PE']} onChange={setOptionType} />
-          <Input label="Center Strike" type="number" min={0} step={50} value={centerStrike} onChange={setCenterStrike} />
-          <Input label="Range Points" type="number" min={0} step={50} value={rangePoints} onChange={(value) => setRangePoints(Number(value))} />
+          <Select label="Exchange" value={optionExchange} options={['NFO', 'BFO']} onChange={changeOptionExchange} />
+          <Select label="Underlying" value={underlying} options={underlyings.length ? underlyings : ['NIFTY']} onChange={changeUnderlying} />
+          <Select label="Expiry" value={expiry} options={expiries.length ? expiries : ['']} onChange={changeExpiry} />
+          <Select label="Type" value={optionType} options={['BOTH', 'CE', 'PE']} onChange={changeOptionType} />
           <Input label="Contracts/Side" type="number" min={1} step={1} value={contractsEachSide} onChange={(value) => setContractsEachSide(Number(value))} />
+        </div>
+        <div className="selected-box compact">
+          <strong>{underlying} spot</strong>
+          <span>{underlyingQuote ? `${underlyingQuote.exchange}:${underlyingQuote.tradingsymbol} · ${money(underlyingQuote.last_price)}` : underlyingQuoteError ? 'LTP unavailable' : 'Loading LTP'}</span>
         </div>
         <button type="button" className="icon-text-button form-submit" onClick={() => void loadOptionContracts()} disabled={optionLoading || !underlying}>
           <RefreshCw />
@@ -894,15 +1047,12 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
       <Segmented label="Side" value={form.side} options={['BUY', 'SELL']} onChange={(side) => setForm({ ...form, side: side as Side })} />
       <Input label="Quantity" type="number" min={1} step={1} value={form.quantity} onChange={(quantity) => setForm({ ...form, quantity: Number(quantity) })} />
       {selectedLotSize > 0 && <p className="form-hint">Lot size {selectedLotSize}. Quantity must be a multiple of this value.</p>}
-      {watchlist.length > 0 ? (
-        <div className="selected-box">
-          <strong>{form.exchange}:{form.tradingsymbol}</strong>
-          <span>{form.product}</span>
-        </div>
-      ) : (
-        <Select label="Product" value={form.product} options={props.metadata?.enums.products ?? ['MIS', 'NRML']} onChange={(product) => setForm({ ...form, product })} />
-      )}
-      <Select label="Order Type" value={form.order_type} options={['MARKET', 'LIMIT']} onChange={(order_type) => setForm({ ...form, order_type })} />
+      <div className="selected-box">
+        <strong>{form.tradingsymbol ? `${form.exchange}:${form.tradingsymbol}` : 'Select an option contract'}</strong>
+        <span>{form.product}</span>
+      </div>
+      <Select label="Product" value={form.product} options={props.metadata?.enums.products ?? ['MIS', 'NRML']} onChange={(product) => setForm({ ...form, product })} />
+      <Select label="Order Type" value={form.order_type} options={['MARKET', 'LIMIT']} onChange={changeOrderType} />
       {form.order_type === 'LIMIT' && (
         <div className="input-action-row">
           <Input label="Limit Price" type="number" min={0} step="0.05" value={form.price ?? ''} onChange={(price) => setForm({ ...form, price: Number(price) })} />
@@ -912,17 +1062,38 @@ function CreateTradeForm(props: { metadata?: Metadata; onRun: (label: string, fn
         </div>
       )}
       <label className="check-row">
-        <input type="checkbox" checked={withProtection} onChange={(event) => setWithProtection(event.target.checked)} />
-        <span>Protection</span>
+        <input type="checkbox" checked={effectiveWithProtection} disabled={!!defaults?.require_order_protection} onChange={(event) => setWithProtection(event.target.checked)} />
+        <span>SL + Target Protection</span>
       </label>
-      {withProtection && (
-        <div className="form-grid two">
-          <Input label="Reference Price" type="number" min={0} step="0.05" value={form.protection?.reference_price ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, reference_price: optionalNumber(value) } })} />
-          <Input label="SL Points" type="number" min={0} step="0.05" value={form.protection?.stop_loss_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, stop_loss_points: optionalNumber(value) } })} />
-          <Input label="Target Points" type="number" min={0} step="0.05" value={form.protection?.target_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, target_points: optionalNumber(value) } })} />
-          <Input label="SL Offset" type="number" min={0} step="0.05" value={form.protection?.sl_limit_offset ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, sl_limit_offset: optionalNumber(value) } })} />
-          <Input label="Trail By" type="number" min={0} step="0.05" value={form.protection?.trail_by ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, trail_by: optionalNumber(value) } })} />
-        </div>
+      {effectiveWithProtection && (
+        <>
+          <div className="preset-row">
+            <button type="button" onClick={() => applyProtectionPreset(20, 40)}>20 / 40</button>
+            <button type="button" onClick={() => applyProtectionPreset(30, 60)}>30 / 60</button>
+            <button type="button" onClick={() => applyProtectionPreset(50, 100)}>50 / 100</button>
+          </div>
+          {form.order_type === 'LIMIT' ? (
+            <div className="selected-box compact">
+              <strong>Risk basis</strong>
+              <span>{form.price ? `Limit Price ${money(form.price)}` : 'Limit price will be used for SL/target preview'}</span>
+            </div>
+          ) : (
+            <div className="input-action-row">
+              <Input label="Est. Entry Price" type="number" min={0} step="0.05" value={form.protection?.reference_price ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, reference_price: optionalNumber(value) } })} />
+              <button type="button" className="text-button" onClick={() => void fetchEntryLTP()} disabled={ltpLoading || !form.exchange || !form.tradingsymbol}>
+                {ltpLoading ? 'Loading' : 'Use LTP'}
+              </button>
+            </div>
+          )}
+          <div className="form-grid two">
+            <Input label="SL Points" type="number" min={0} step="0.05" value={form.protection?.stop_loss_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, stop_loss_points: optionalNumber(value) } })} />
+            <Input label="Target Points" type="number" min={0} step="0.05" value={form.protection?.target_points ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, target_points: optionalNumber(value) } })} />
+            <Input label="SL Offset" type="number" min={0} step="0.05" value={form.protection?.sl_limit_offset ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, sl_limit_offset: optionalNumber(value) } })} />
+            <Input label="Trail SL By" type="number" min={0} step="0.05" value={form.protection?.trail_by ?? ''} onChange={(value) => setForm({ ...form, protection: { ...form.protection, trail_by: optionalNumber(value) } })} />
+          </div>
+          <p className="form-hint">Trail SL By is optional. If set, the backend moves the SL in your favor by this point gap while the position is active.</p>
+          <RiskPreview preview={protectionPreview} orderType={form.order_type} />
+        </>
       )}
       {formError && <p className="form-error">{formError}</p>}
       <button className="icon-text-button primary form-submit" type="submit"><Plus /> Create</button>
@@ -944,7 +1115,7 @@ function StopLossForm(props: { action: Extract<Action, { type: 'stop-loss' }>; o
     <FormShell onSubmit={submit}>
       <Input label="Trigger Price" type="number" min={0} step="0.05" value={form.trigger_price || ''} onChange={(value) => setForm({ ...form, trigger_price: Number(value) })} />
       <Input label="Limit Price" type="number" min={0} step="0.05" value={form.limit_price || ''} onChange={(value) => setForm({ ...form, limit_price: Number(value) })} />
-      <Input label="Trail By" type="number" min={0} step="0.05" value={form.trail_by ?? ''} onChange={(value) => setForm({ ...form, trail_by: Number(value) })} />
+      <Input label="Trail SL By" type="number" min={0} step="0.05" value={form.trail_by ?? ''} onChange={(value) => setForm({ ...form, trail_by: Number(value) })} />
       <button className="icon-text-button primary form-submit" type="submit"><Shield /> Save SL</button>
     </FormShell>
   );
@@ -1008,6 +1179,26 @@ function FormShell(props: { children: React.ReactNode; onSubmit: () => void | Pr
   );
 }
 
+function RiskPreview(props: { preview?: RiskPreviewData; orderType: string }) {
+  if (!props.preview) {
+    return <p className="form-hint">Add an estimated entry price or use LTP to preview SL, target, and risk.</p>;
+  }
+  return (
+    <div className="risk-preview">
+      <DetailGrid rows={[
+        ['Entry Basis', money(props.preview.referencePrice)],
+        ['SL Trigger', money(props.preview.stopTrigger)],
+        ['SL Limit', money(props.preview.stopLimit)],
+        ['Target', money(props.preview.targetPrice)],
+        ['Risk', signedMoney(-props.preview.riskAmount)],
+        ['Reward', signedMoney(props.preview.rewardAmount)],
+        ['R:R', props.preview.riskReward > 0 ? `1:${props.preview.riskReward.toFixed(2)}` : '-'],
+      ]} />
+      {props.orderType === 'LIMIT' && <p className="form-hint">Protection is kept pending until the limit entry completes.</p>}
+    </div>
+  );
+}
+
 function TableControls(props: { state: TableState; total: number; statusOptions: string[]; onChange: (state: TableState) => void }) {
   function update(patch: Partial<TableState>) {
     props.onChange({ ...props.state, ...patch, page: patch.page ?? 1 });
@@ -1034,6 +1225,72 @@ function TableControls(props: { state: TableState; total: number; statusOptions:
       <span className="table-total">{props.total} rows</span>
     </div>
   );
+}
+
+function PnLTile(props: { label: string; value: number }) {
+  const tone = props.value > 0 ? 'positive' : props.value < 0 ? 'negative' : '';
+  return (
+    <div className={`pnl-tile ${tone}`}>
+      <span>{props.label}</span>
+      <strong>{signedMoney(props.value)}</strong>
+    </div>
+  );
+}
+
+function TabButton(props: { label: string; active: boolean; count: number; onClick: () => void }) {
+  return (
+    <button className={`tab-button ${props.active ? 'active' : ''}`} onClick={props.onClick}>
+      <span>{props.label}</span>
+      <strong>{props.count}</strong>
+    </button>
+  );
+}
+
+function ClosedTradeTable(props: { trades: ManagedTrade[]; orders: KiteOrder[] }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Trade</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Qty</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>P&L</th>
+            <th>Closed</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.trades.map((trade) => {
+            const exitPrice = closedTradeExitPrice(trade, props.orders);
+            const pnl = closedTradePnL(trade, props.orders);
+            return (
+              <tr key={trade.id}>
+                <td className="mono">{trade.id}</td>
+                <td>{trade.exchange}:{trade.tradingsymbol}</td>
+                <td><SidePill side={trade.side} /></td>
+                <td>{trade.quantity}</td>
+                <td>{money(trade.entry_price)}</td>
+                <td>{money(exitPrice)}</td>
+                <td><PnLValue value={pnl} /></td>
+                <td>{trade.closed_at ? formatDateTime(trade.closed_at) : '-'}</td>
+                <td className="muted">{dash(trade.exit_reason ?? '')}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PnLValue(props: { value?: number }) {
+  if (props.value === undefined) return <span className="muted">-</span>;
+  const tone = props.value > 0 ? 'positive' : props.value < 0 ? 'negative' : '';
+  return <span className={`pnl-value ${tone}`}>{signedMoney(props.value)}</span>;
 }
 
 function Pager<T>(props: { page: PageResult<T>; state: TableState; onChange: (state: TableState) => void }) {
@@ -1192,15 +1449,6 @@ function titleFor(view: View) {
   }
 }
 
-function symbolKey(symbol: { exchange: string; tradingsymbol: string; product: string }) {
-  return `${symbol.exchange}:${symbol.tradingsymbol}:${symbol.product}`;
-}
-
-function symbolLabel(symbol: { exchange: string; tradingsymbol: string; product: string; name?: string }) {
-  const instrument = `${symbol.exchange}:${symbol.tradingsymbol}`;
-  return symbol.name ? `${symbol.name} · ${instrument} · ${symbol.product}` : `${instrument} · ${symbol.product}`;
-}
-
 function optionLabel(contract: OptionContract) {
   return `${contract.strike} ${contract.instrument_type} · ${contract.tradingsymbol} · lot ${contract.lot_size}`;
 }
@@ -1228,6 +1476,59 @@ function latestSyncedAt(orders: KiteOrder[], positions: KitePosition[]) {
 
 function linkedTrade(trades: ManagedTrade[], group: PositionGroup) {
   return trades.find((trade) => group.trade_ids.includes(trade.id));
+}
+
+function mergeLivePositionsIntoGroups(groups: PositionGroup[], positions: KitePosition[]) {
+  const merged = [...groups];
+  const seen = new Set(merged.map((group) => group.id));
+  for (const position of positions) {
+    const id = positionGroupID(position.exchange, position.tradingsymbol, position.product);
+    if (seen.has(id)) continue;
+    const quantity = Math.abs(position.quantity);
+    const pnlPercent = position.average_price && quantity ? (position.pnl ?? 0) / (position.average_price * quantity) * 100 : undefined;
+    merged.push({
+      id,
+      exchange: position.exchange,
+      tradingsymbol: position.tradingsymbol,
+      product: position.product,
+      side: position.quantity < 0 ? 'SELL' : position.quantity > 0 ? 'BUY' : '',
+      quantity,
+      local_quantity: 0,
+      broker_quantity: quantity,
+      average_entry_price: position.average_price,
+      last_price: position.last_price,
+      unrealized_pnl: position.pnl,
+      pnl_percent: pnlPercent,
+      market_synced_at: position.synced_at,
+      trade_ids: [],
+      trade_status: 'OPEN',
+      creation_source: 'KITE_APP',
+      management_status: 'UNMANAGED',
+      created_at: position.synced_at,
+      updated_at: position.synced_at,
+    });
+    seen.add(id);
+  }
+  return merged;
+}
+
+function positionGroupID(exchange: string, symbol: string, product: string) {
+  return `${exchange}:${symbol}:${product}`.toUpperCase();
+}
+
+function underlyingQuoteInstrument(optionExchange: string, underlying: string) {
+  const symbol = underlying.trim().toUpperCase();
+  if (!symbol) return null;
+  const indexMap: Record<string, { exchange: string; symbol: string }> = {
+    NIFTY: { exchange: 'NSE', symbol: 'NIFTY 50' },
+    BANKNIFTY: { exchange: 'NSE', symbol: 'NIFTY BANK' },
+    FINNIFTY: { exchange: 'NSE', symbol: 'NIFTY FIN SERVICE' },
+    MIDCPNIFTY: { exchange: 'NSE', symbol: 'NIFTY MID SELECT' },
+    SENSEX: { exchange: 'BSE', symbol: 'SENSEX' },
+  };
+  if (indexMap[symbol]) return indexMap[symbol];
+  if (['BANKEX', 'FOCIT', 'SENSEX50'].includes(symbol)) return null;
+  return { exchange: optionExchange === 'BFO' ? 'BSE' : 'NSE', symbol };
 }
 
 function matchesTableFilter(item: KiteOrder | ManagedTrade | PositionGroup, state: TableState) {
@@ -1282,8 +1583,10 @@ function validateCreateTradeForm(body: CreateTradeRequest, withProtection: boole
   if (!withProtection || !body.protection) return '';
 
   const protection = body.protection;
+  if (!protection.stop_loss_points || protection.stop_loss_points <= 0) return 'SL points are required for protected trades.';
+  if (!protection.target_points || protection.target_points <= 0) return 'Target points are required for protected trades.';
   const values: Array<[string, number | undefined]> = [
-    ['Reference price', protection.reference_price],
+    ['Estimated entry price', protection.reference_price],
     ['SL points', protection.stop_loss_points],
     ['Target points', protection.target_points],
     ['SL offset', protection.sl_limit_offset],
@@ -1295,19 +1598,64 @@ function validateCreateTradeForm(body: CreateTradeRequest, withProtection: boole
     }
   }
 
-  const referencePrice = protection.reference_price || body.price || 0;
+  const referencePrice = body.order_type === 'LIMIT' ? body.price || 0 : protection.reference_price || body.price || 0;
   if (referencePrice <= 0) return '';
 
   const stopLossPoints = protection.stop_loss_points ?? 0;
   const targetPoints = protection.target_points ?? 0;
   const slOffset = protection.sl_limit_offset ?? 0;
   if (body.side === 'BUY' && stopLossPoints > 0 && (referencePrice - stopLossPoints <= 0 || referencePrice - stopLossPoints - slOffset <= 0)) {
-    return 'SL points/offset are too large for the reference price.';
+    return 'SL points/offset are too large for the entry price.';
   }
   if (body.side === 'SELL' && targetPoints > 0 && referencePrice - targetPoints <= 0) {
-    return 'Target points are too large for the reference price.';
+    return 'Target points are too large for the entry price.';
   }
   return '';
+}
+
+function riskPreview(body: CreateTradeRequest, withProtection: boolean): RiskPreviewData | undefined {
+  const protection = body.protection;
+  if (!withProtection || !protection) return undefined;
+  const referencePrice = body.order_type === 'LIMIT' ? body.price || 0 : protection.reference_price || body.price || 0;
+  const stopLossPoints = protection.stop_loss_points ?? 0;
+  const targetPoints = protection.target_points ?? 0;
+  if (referencePrice <= 0 || stopLossPoints <= 0 || targetPoints <= 0 || body.quantity <= 0) return undefined;
+  const offset = protection.sl_limit_offset ?? 0;
+  const isSell = body.side === 'SELL';
+  const stopTrigger = isSell ? referencePrice + stopLossPoints : referencePrice - stopLossPoints;
+  const stopLimit = isSell ? stopTrigger + offset : stopTrigger - offset;
+  const targetPrice = isSell ? referencePrice - targetPoints : referencePrice + targetPoints;
+  const riskAmount = stopLossPoints * body.quantity;
+  const rewardAmount = targetPoints * body.quantity;
+  return {
+    referencePrice,
+    stopTrigger,
+    stopLimit,
+    targetPrice,
+    riskAmount,
+    rewardAmount,
+    riskReward: riskAmount > 0 ? rewardAmount / riskAmount : 0,
+  };
+}
+
+function groupNeedsAttentionUI(group: PositionGroup) {
+  return group.management_status === 'CONFLICT' ||
+    group.management_status === 'UNMANAGED' ||
+    group.management_status === 'PARTIALLY_MANAGED' ||
+    (group.warnings?.length ?? 0) > 0;
+}
+
+function closedTradeExitPrice(trade: ManagedTrade, orders: KiteOrder[]) {
+  if (!trade.exit_order_id) return undefined;
+  const order = orders.find((item) => item.order_id === trade.exit_order_id);
+  return order?.average_price || order?.price || undefined;
+}
+
+function closedTradePnL(trade: ManagedTrade, orders: KiteOrder[]) {
+  const exitPrice = closedTradeExitPrice(trade, orders);
+  if (!exitPrice || !trade.entry_price || !trade.quantity) return undefined;
+  const difference = trade.side === 'SELL' ? trade.entry_price - exitPrice : exitPrice - trade.entry_price;
+  return difference * trade.quantity;
 }
 
 function orderMillis(order: KiteOrder) {
@@ -1345,6 +1693,13 @@ function formatDateTime(value: string) {
 function money(value?: number) {
   if (!value) return '-';
   return value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
+
+function signedMoney(value: number) {
+  const formatted = Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  if (value > 0) return `+${formatted}`;
+  if (value < 0) return `-${formatted}`;
+  return '0';
 }
 
 function dash(value: string) {
