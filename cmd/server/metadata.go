@@ -204,6 +204,8 @@ func endpointMap() map[string][]string {
 		"/instruments/sync":                     {"POST"},
 		"/instruments/underlyings":              {"GET"},
 		"/instruments/expiries":                 {"GET"},
+		"/instruments/future-underlyings":       {"GET"},
+		"/instruments/futures":                  {"GET"},
 		"/instruments/options":                  {"GET"},
 		"/market/ltp":                           {"GET"},
 		"/market/groups":                        {"GET"},

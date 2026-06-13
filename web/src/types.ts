@@ -131,6 +131,25 @@ export interface OptionContract {
   tick_size: number;
 }
 
+export interface FutureContract {
+  exchange: string;
+  tradingsymbol: string;
+  underlying: string;
+  expiry: string;
+  instrument_type: 'FUT' | string;
+  product: string;
+  default_quantity: number;
+  lot_size: number;
+  tick_size: number;
+  last_price?: number;
+}
+
+export interface FutureContractsResponse {
+  exchange: string;
+  underlying?: string;
+  contracts: FutureContract[];
+}
+
 export interface OptionContractsResponse {
   exchange: string;
   underlying: string;

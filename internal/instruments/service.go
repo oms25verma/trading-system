@@ -50,6 +50,25 @@ type OptionContract struct {
 	TickSize        float64 `json:"tick_size"`
 }
 
+type FutureContract struct {
+	Exchange        string  `json:"exchange"`
+	TradingSymbol   string  `json:"tradingsymbol"`
+	Underlying      string  `json:"underlying"`
+	Expiry          string  `json:"expiry"`
+	InstrumentType  string  `json:"instrument_type"`
+	Product         string  `json:"product"`
+	DefaultQuantity int     `json:"default_quantity"`
+	LotSize         int     `json:"lot_size"`
+	TickSize        float64 `json:"tick_size"`
+	LastPrice       float64 `json:"last_price,omitempty"`
+}
+
+type FutureContractsResponse struct {
+	Exchange   string           `json:"exchange"`
+	Underlying string           `json:"underlying,omitempty"`
+	Contracts  []FutureContract `json:"contracts"`
+}
+
 type OptionContractsResponse struct {
 	Exchange      string           `json:"exchange"`
 	Underlying    string           `json:"underlying"`
@@ -111,6 +130,24 @@ func (s *Service) Underlyings(exchange string) ([]string, error) {
 	return sortedKeys(seen), nil
 }
 
+func (s *Service) FutureUnderlyings(exchange string) ([]string, error) {
+	items, err := s.load(normalizeExchange(exchange))
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		if !isFuture(item) {
+			continue
+		}
+		underlying := futureUnderlyingName(item)
+		if underlying != "" {
+			seen[underlying] = true
+		}
+	}
+	return sortedKeys(seen), nil
+}
+
 func (s *Service) Expiries(exchange, underlying string) ([]string, error) {
 	items, err := s.load(normalizeExchange(exchange))
 	if err != nil {
@@ -134,6 +171,44 @@ func (s *Service) Expiries(exchange, underlying string) ([]string, error) {
 		return expiries[i] < expiries[j]
 	})
 	return expiries, nil
+}
+
+func (s *Service) Futures(exchange, underlying, product string) (*FutureContractsResponse, error) {
+	exchange = normalizeExchange(exchange)
+	underlying = strings.ToUpper(strings.TrimSpace(underlying))
+	if product == "" {
+		product = "MIS"
+	}
+	items, err := s.load(exchange)
+	if err != nil {
+		return nil, err
+	}
+	contracts := make([]FutureContract, 0)
+	for _, item := range items {
+		if !isFuture(item) {
+			continue
+		}
+		if underlying != "" && !matchesFutureUnderlying(item, underlying) {
+			continue
+		}
+		contracts = append(contracts, toFutureContract(item, product))
+	}
+	sort.Slice(contracts, func(i, j int) bool {
+		left, leftOK := parseDate(contracts[i].Expiry)
+		right, rightOK := parseDate(contracts[j].Expiry)
+		if leftOK && rightOK && !left.Equal(right) {
+			return left.Before(right)
+		}
+		if contracts[i].Underlying == contracts[j].Underlying {
+			return contracts[i].TradingSymbol < contracts[j].TradingSymbol
+		}
+		return contracts[i].Underlying < contracts[j].Underlying
+	})
+	return &FutureContractsResponse{
+		Exchange:   exchange,
+		Underlying: underlying,
+		Contracts:  contracts,
+	}, nil
 }
 
 type OptionFilter struct {
@@ -296,6 +371,10 @@ func isOption(item kite.Instrument) bool {
 	return item.InstrumentType == "CE" || item.InstrumentType == "PE"
 }
 
+func isFuture(item kite.Instrument) bool {
+	return item.InstrumentType == "FUT" || strings.HasSuffix(strings.ToUpper(item.Segment), "-FUT")
+}
+
 func underlyingName(item kite.Instrument) string {
 	if item.Name != "" {
 		return strings.ToUpper(item.Name)
@@ -310,6 +389,19 @@ func underlyingName(item kite.Instrument) string {
 	return ""
 }
 
+func futureUnderlyingName(item kite.Instrument) string {
+	if item.Name != "" {
+		return strings.ToUpper(strings.TrimSpace(item.Name))
+	}
+	symbol := strings.ToUpper(strings.TrimSpace(item.TradingSymbol))
+	if strings.HasSuffix(symbol, "FUT") {
+		symbol = strings.TrimSuffix(symbol, "FUT")
+	}
+	return strings.TrimRightFunc(symbol, func(r rune) bool {
+		return (r >= '0' && r <= '9') || r == '.'
+	})
+}
+
 func matchesUnderlying(item kite.Instrument, underlying string) bool {
 	if underlying == "" {
 		return true
@@ -318,6 +410,16 @@ func matchesUnderlying(item kite.Instrument, underlying string) bool {
 		return true
 	}
 	return strings.HasPrefix(item.TradingSymbol, underlying)
+}
+
+func matchesFutureUnderlying(item kite.Instrument, underlying string) bool {
+	if underlying == "" {
+		return true
+	}
+	if strings.EqualFold(futureUnderlyingName(item), underlying) {
+		return true
+	}
+	return strings.HasPrefix(strings.ToUpper(item.TradingSymbol), underlying)
 }
 
 func normalizeTypes(types []string) map[string]bool {
@@ -337,6 +439,25 @@ func normalizeTypes(types []string) map[string]bool {
 		out["PE"] = true
 	}
 	return out
+}
+
+func toFutureContract(item kite.Instrument, product string) FutureContract {
+	lotSize := item.LotSize
+	if lotSize <= 0 {
+		lotSize = 1
+	}
+	return FutureContract{
+		Exchange:        item.Exchange,
+		TradingSymbol:   item.TradingSymbol,
+		Underlying:      futureUnderlyingName(item),
+		Expiry:          item.Expiry,
+		InstrumentType:  item.InstrumentType,
+		Product:         strings.ToUpper(product),
+		DefaultQuantity: lotSize,
+		LotSize:         lotSize,
+		TickSize:        item.TickSize,
+		LastPrice:       item.LastPrice,
+	}
 }
 
 func toOptionContract(item kite.Instrument, product string) OptionContract {
