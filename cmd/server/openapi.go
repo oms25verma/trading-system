@@ -113,6 +113,12 @@ func requestSchema(method, path string) string {
 	if method == "POST" && path == "/groups/{id}/take-over" {
 		return "TakeOverGroupRequest"
 	}
+	if method == "POST" && path == "/historical/sync" {
+		return "HistoricalSyncRequest"
+	}
+	if method == "POST" && path == "/backtests" {
+		return "BacktestRequest"
+	}
 	return ""
 }
 
@@ -124,6 +130,18 @@ func responseSchema(method, path string) string {
 		return "DashboardSummary"
 	case path == "/sync/kite":
 		return "SyncResult"
+	case path == "/historical/sync":
+		return "HistoricalSyncResult"
+	case path == "/historical/candles":
+		return "CandleList"
+	case path == "/historical/instruments":
+		return "HistoricalInstrumentList"
+	case path == "/backtests" && method == "POST":
+		return "BacktestResult"
+	case path == "/backtests" && method == "GET":
+		return "BacktestSummaryList"
+	case path == "/backtests/{id}":
+		return "BacktestResult"
 	case path == "/trades" && method == "GET":
 		return "ManagedTradeList"
 	case strings.HasPrefix(path, "/trades"):
@@ -197,6 +215,119 @@ func componentSchemas() map[string]any {
 			"role":     enumSchema("stop_loss", "target"),
 		}),
 		"TakeOverGroupRequest": objectSchema(nil, map[string]any{"entry_price": numberSchema()}),
+		"HistoricalSyncRequest": objectSchema([]string{"exchange", "tradingsymbol", "instrument_token", "interval", "from", "to"}, map[string]any{
+			"exchange":         stringSchema(),
+			"tradingsymbol":    stringSchema(),
+			"instrument_token": integerSchema(),
+			"interval":         enumSchema("minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "day"),
+			"from":             stringSchema(),
+			"to":               stringSchema(),
+			"continuous":       boolSchema(),
+			"include_oi":       boolSchema(),
+		}),
+		"HistoricalSyncResult": objectSchema(nil, map[string]any{
+			"exchange":         stringSchema(),
+			"tradingsymbol":    stringSchema(),
+			"instrument_token": integerSchema(),
+			"interval":         stringSchema(),
+			"from":             stringSchema(),
+			"to":               stringSchema(),
+			"candles_fetched":  integerSchema(),
+			"candles_stored":   integerSchema(),
+			"path":             stringSchema(),
+			"paths":            arraySchema(stringSchema()),
+			"synced_at":        stringSchema(),
+		}),
+		"HistoricalInstrument": objectSchema(nil, map[string]any{
+			"instrument_token": integerSchema(),
+			"exchange":         stringSchema(),
+			"tradingsymbol":    stringSchema(),
+			"underlying":       stringSchema(),
+			"expiry":           stringSchema(),
+			"strike":           numberSchema(),
+			"instrument_type":  stringSchema(),
+			"segment":          stringSchema(),
+			"lot_size":         integerSchema(),
+			"tick_size":        numberSchema(),
+		}),
+		"Candle": objectSchema(nil, map[string]any{
+			"time":   stringSchema(),
+			"open":   numberSchema(),
+			"high":   numberSchema(),
+			"low":    numberSchema(),
+			"close":  numberSchema(),
+			"volume": integerSchema(),
+			"oi":     integerSchema(),
+		}),
+		"BacktestRequest": objectSchema([]string{"exchange", "tradingsymbol", "interval", "from", "to", "strategy"}, map[string]any{
+			"exchange":            stringSchema(),
+			"tradingsymbol":       stringSchema(),
+			"interval":            enumSchema("minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "day"),
+			"from":                stringSchema(),
+			"to":                  stringSchema(),
+			"strategy":            enumSchema("opening_range_breakout", "orb", "none"),
+			"quantity":            integerSchema(),
+			"multiplier":          numberSchema(),
+			"stop_loss_points":    numberSchema(),
+			"target_points":       numberSchema(),
+			"entry_buffer_points": numberSchema(),
+			"slippage_points":     numberSchema(),
+			"brokerage_per_trade": numberSchema(),
+			"range_start":         stringSchema(),
+			"range_end":           stringSchema(),
+			"exit_time":           stringSchema(),
+		}),
+		"BacktestTrade": objectSchema(nil, map[string]any{
+			"entry_time": stringSchema(),
+			"exit_time":  stringSchema(),
+			"side":       stringSchema(),
+			"entry":      numberSchema(),
+			"exit":       numberSchema(),
+			"quantity":   integerSchema(),
+			"gross_pnl":  numberSchema(),
+			"costs":      numberSchema(),
+			"pnl":        numberSchema(),
+			"reason":     stringSchema(),
+		}),
+		"EquityPoint": objectSchema(nil, map[string]any{
+			"time":     stringSchema(),
+			"equity":   numberSchema(),
+			"drawdown": numberSchema(),
+		}),
+		"BacktestResult": objectSchema(nil, map[string]any{
+			"id":            stringSchema(),
+			"strategy":      stringSchema(),
+			"exchange":      stringSchema(),
+			"tradingsymbol": stringSchema(),
+			"interval":      stringSchema(),
+			"trades":        arraySchema(schemaRef("BacktestTrade")),
+			"total_pnl":     numberSchema(),
+			"gross_pnl":     numberSchema(),
+			"total_costs":   numberSchema(),
+			"max_drawdown":  numberSchema(),
+			"win_rate":      numberSchema(),
+			"expectancy":    numberSchema(),
+			"avg_win":       numberSchema(),
+			"avg_loss":      numberSchema(),
+			"equity_curve":  arraySchema(schemaRef("EquityPoint")),
+			"candles_used":  integerSchema(),
+			"generated_at":  stringSchema(),
+		}),
+		"BacktestSummary": objectSchema(nil, map[string]any{
+			"id":            stringSchema(),
+			"strategy":      stringSchema(),
+			"exchange":      stringSchema(),
+			"tradingsymbol": stringSchema(),
+			"interval":      stringSchema(),
+			"trades":        integerSchema(),
+			"total_pnl":     numberSchema(),
+			"gross_pnl":     numberSchema(),
+			"total_costs":   numberSchema(),
+			"max_drawdown":  numberSchema(),
+			"win_rate":      numberSchema(),
+			"expectancy":    numberSchema(),
+			"generated_at":  stringSchema(),
+		}),
 		"ManagedTrade": objectSchema(nil, map[string]any{
 			"id":                  stringSchema(),
 			"exchange":            stringSchema(),
@@ -326,10 +457,13 @@ func componentSchemas() map[string]any {
 			"order": schemaRef("KiteOrder"),
 			"trade": schemaRef("ManagedTrade"),
 		}),
-		"ManagedTradeList":  arraySchema(schemaRef("ManagedTrade")),
-		"PositionGroupList": arraySchema(schemaRef("PositionGroup")),
-		"KiteOrderList":     arraySchema(schemaRef("KiteOrder")),
-		"KitePositionList":  arraySchema(schemaRef("KitePosition")),
+		"ManagedTradeList":         arraySchema(schemaRef("ManagedTrade")),
+		"PositionGroupList":        arraySchema(schemaRef("PositionGroup")),
+		"KiteOrderList":            arraySchema(schemaRef("KiteOrder")),
+		"KitePositionList":         arraySchema(schemaRef("KitePosition")),
+		"CandleList":               arraySchema(schemaRef("Candle")),
+		"HistoricalInstrumentList": arraySchema(schemaRef("HistoricalInstrument")),
+		"BacktestSummaryList":      arraySchema(schemaRef("BacktestSummary")),
 	}
 }
 

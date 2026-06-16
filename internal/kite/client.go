@@ -240,6 +240,25 @@ type PositionResponse struct {
 	PnL           float64 `json:"pnl"`
 }
 
+type HistoricalRequest struct {
+	InstrumentToken int64
+	Interval        string
+	From            time.Time
+	To              time.Time
+	Continuous      bool
+	IncludeOI       bool
+}
+
+type HistoricalCandle struct {
+	Time   time.Time
+	Open   float64
+	High   float64
+	Low    float64
+	Close  float64
+	Volume int64
+	OI     int64
+}
+
 type Instrument struct {
 	InstrumentToken uint32
 	ExchangeToken   string
@@ -336,6 +355,43 @@ func (c *Client) Instruments(ctx context.Context, exchange string) ([]Instrument
 		return nil, err
 	}
 	return parseInstrumentsCSV(payload)
+}
+
+func (c *Client) HistoricalCandles(ctx context.Context, req HistoricalRequest) ([]HistoricalCandle, error) {
+	if req.InstrumentToken <= 0 {
+		return nil, errors.New("missing instrument token")
+	}
+	interval := strings.ToLower(strings.TrimSpace(req.Interval))
+	if interval == "" {
+		return nil, errors.New("missing historical interval")
+	}
+	query := url.Values{}
+	query.Set("from", req.From.Format("2006-01-02 15:04:05"))
+	query.Set("to", req.To.Format("2006-01-02 15:04:05"))
+	if req.Continuous {
+		query.Set("continuous", "1")
+	}
+	if req.IncludeOI {
+		query.Set("oi", "1")
+	}
+	path := "/instruments/historical/" + strconv.FormatInt(req.InstrumentToken, 10) + "/" + url.PathEscape(interval) + "?" + query.Encode()
+	var out struct {
+		Data struct {
+			Candles [][]any `json:"candles"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	candles := make([]HistoricalCandle, 0, len(out.Data.Candles))
+	for _, raw := range out.Data.Candles {
+		candle, err := parseHistoricalCandle(raw)
+		if err != nil {
+			return nil, err
+		}
+		candles = append(candles, candle)
+	}
+	return candles, nil
 }
 
 func (c *Client) doForm(ctx context.Context, method, path string, form url.Values, out any) error {
@@ -644,6 +700,68 @@ func parseInstrumentsCSV(payload []byte) ([]Instrument, error) {
 		})
 	}
 	return out, nil
+}
+
+func parseHistoricalCandle(raw []any) (HistoricalCandle, error) {
+	if len(raw) < 6 {
+		return HistoricalCandle{}, fmt.Errorf("historical candle has %d fields, expected at least 6", len(raw))
+	}
+	timestamp, ok := raw[0].(string)
+	if !ok || strings.TrimSpace(timestamp) == "" {
+		return HistoricalCandle{}, fmt.Errorf("historical candle timestamp is invalid")
+	}
+	at, err := parseKiteTime(timestamp)
+	if err != nil {
+		return HistoricalCandle{}, err
+	}
+	candle := HistoricalCandle{
+		Time:   at.UTC(),
+		Open:   numberAt(raw, 1),
+		High:   numberAt(raw, 2),
+		Low:    numberAt(raw, 3),
+		Close:  numberAt(raw, 4),
+		Volume: int64(numberAt(raw, 5)),
+	}
+	if len(raw) > 6 {
+		candle.OI = int64(numberAt(raw, 6))
+	}
+	return candle, nil
+}
+
+func parseKiteTime(value string) (time.Time, error) {
+	layouts := []string{
+		"2006-01-02T15:04:05-0700",
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+	}
+	var lastErr error
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, fmt.Errorf("parse kite time %q: %w", value, lastErr)
+}
+
+func numberAt(raw []any, index int) float64 {
+	if index >= len(raw) {
+		return 0
+	}
+	switch value := raw[index].(type) {
+	case float64:
+		return value
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		number, _ := value.Float64()
+		return number
+	default:
+		return 0
+	}
 }
 
 func emptyFloat(raw string) string {

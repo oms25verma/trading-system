@@ -274,6 +274,128 @@ export interface TargetRequest {
   price: number;
 }
 
+export interface HistoricalSyncRequest {
+  exchange: string;
+  tradingsymbol: string;
+  instrument_token: number;
+  interval: string;
+  from: string;
+  to: string;
+  continuous?: boolean;
+  include_oi?: boolean;
+}
+
+export interface HistoricalSyncResult {
+  exchange: string;
+  tradingsymbol: string;
+  instrument_token: number;
+  interval: string;
+  from: string;
+  to: string;
+  candles_fetched: number;
+  candles_stored: number;
+  path?: string;
+  paths?: string[];
+  synced_at: string;
+}
+
+export interface Candle {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  oi?: number;
+}
+
+export interface HistoricalInstrument {
+  instrument_token: number;
+  exchange: string;
+  tradingsymbol: string;
+  underlying?: string;
+  expiry?: string;
+  strike?: number;
+  instrument_type: string;
+  segment: string;
+  lot_size: number;
+  tick_size: number;
+}
+
+export interface BacktestRequest {
+  exchange: string;
+  tradingsymbol: string;
+  interval: string;
+  from: string;
+  to: string;
+  strategy: string;
+  quantity: number;
+  multiplier: number;
+  stop_loss_points: number;
+  target_points: number;
+  entry_buffer_points?: number;
+  slippage_points?: number;
+  brokerage_per_trade?: number;
+  range_start?: string;
+  range_end?: string;
+  exit_time?: string;
+}
+
+export interface BacktestTrade {
+  entry_time: string;
+  exit_time: string;
+  side: Side | string;
+  entry: number;
+  exit: number;
+  quantity: number;
+  gross_pnl: number;
+  costs: number;
+  pnl: number;
+  reason: string;
+}
+
+export interface EquityPoint {
+  time: string;
+  equity: number;
+  drawdown: number;
+}
+
+export interface BacktestResult {
+  id: string;
+  strategy: string;
+  exchange: string;
+  tradingsymbol: string;
+  interval: string;
+  trades: BacktestTrade[];
+  total_pnl: number;
+  gross_pnl: number;
+  total_costs: number;
+  max_drawdown: number;
+  win_rate: number;
+  expectancy: number;
+  avg_win: number;
+  avg_loss: number;
+  equity_curve?: EquityPoint[];
+  candles_used: number;
+  generated_at: string;
+}
+
+export interface BacktestSummary {
+  id: string;
+  strategy: string;
+  exchange: string;
+  tradingsymbol: string;
+  interval: string;
+  trades: number;
+  total_pnl: number;
+  gross_pnl: number;
+  total_costs: number;
+  max_drawdown: number;
+  win_rate: number;
+  expectancy: number;
+  generated_at: string;
+}
+
 export interface ApiErrorBody {
   kind: string;
   code: string;

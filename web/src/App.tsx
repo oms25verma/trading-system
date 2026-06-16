@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowDownToLine,
+  BarChart3,
   Ban,
   CheckCircle2,
   CircleDollarSign,
@@ -24,9 +25,13 @@ import {
 } from 'lucide-react';
 import { ApiError, api } from './api';
 import type {
+  BacktestResult,
+  BacktestSummary,
+  Candle,
   CreateTradeRequest,
   DashboardSummary,
   FutureContract,
+  HistoricalInstrument,
   KiteOrder,
   KitePosition,
   LTPResponse,
@@ -39,7 +44,7 @@ import type {
   TargetRequest,
 } from './types';
 
-type View = 'dashboard' | 'groups' | 'orders' | 'trades' | 'conflicts';
+type View = 'dashboard' | 'groups' | 'orders' | 'trades' | 'conflicts' | 'automation';
 type PositionTab = 'active' | 'closed' | 'unmanaged' | 'conflicts';
 type InstrumentMode = 'NFO_OPTIONS' | 'BFO_OPTIONS' | 'MCX_FUTURES';
 type SelectOption = string | { value: string; label: string };
@@ -219,6 +224,7 @@ export function App() {
           <NavButton icon={<Activity />} label="Positions" active={view === 'groups'} onClick={() => setView('groups')} count={snapshot.groups.length} />
           <NavButton icon={<ListChecks />} label="Orders" active={view === 'orders'} onClick={() => setView('orders')} count={openOrders.length} />
           <NavButton icon={<CircleDollarSign />} label="Trades" active={view === 'trades'} onClick={() => setView('trades')} count={openTrades.length} />
+          <NavButton icon={<BarChart3 />} label="Automation" active={view === 'automation'} onClick={() => setView('automation')} />
           <NavButton icon={<AlertTriangle />} label="Conflicts" active={view === 'conflicts'} onClick={() => setView('conflicts')} count={snapshot.conflicts.length} />
         </nav>
         <div className="sidebar-footer">
@@ -308,6 +314,7 @@ export function App() {
                 onDetails={(group) => setAction({ type: 'group-detail', group })}
               />
             )}
+            {view === 'automation' && <AutomationView />}
           </>
         )}
       </main>
@@ -597,6 +604,432 @@ function ConflictsView(props: {
       />
       {props.groups.length === 0 && <EmptyState label="No conflicts or warnings" />}
     </section>
+  );
+}
+
+function AutomationView() {
+  const today = new Date();
+  const monthStartValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01T09:00`;
+  const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}T23:30`;
+  const [syncForm, setSyncForm] = useState({
+    exchange: 'MCX',
+    tradingsymbol: 'SILVERM26JUNFUT',
+    instrument_token: 118822663,
+    interval: 'minute',
+    from: monthStartValue,
+    to: todayValue,
+    include_oi: true,
+  });
+  const [backtestForm, setBacktestForm] = useState({
+    exchange: 'MCX',
+    tradingsymbol: 'SILVERM26JUNFUT',
+    interval: 'minute',
+    from: monthStartValue,
+    to: todayValue,
+    strategy: 'opening_range_breakout',
+    quantity: 1,
+    multiplier: 5,
+    stop_loss_points: 500,
+    target_points: 1000,
+    entry_buffer_points: 0,
+    slippage_points: 0,
+    brokerage_per_trade: 0,
+    range_start: '09:15',
+    range_end: '09:30',
+    exit_time: '15:20',
+  });
+  const [instrumentSearch, setInstrumentSearch] = useState({
+    exchange: 'MCX',
+    underlying: 'SILVERM',
+    expiry: '',
+    instrument_type: 'FUT',
+    tradingsymbol: '',
+    limit: 50,
+  });
+  const [historicalInstruments, setHistoricalInstruments] = useState<HistoricalInstrument[]>([]);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [summaries, setSummaries] = useState<BacktestSummary[]>([]);
+  const [latest, setLatest] = useState<BacktestResult | null>(null);
+  const [candles, setCandles] = useState<Candle[]>([]);
+
+  async function loadSummaries() {
+    setSummaries(await api.backtests());
+  }
+
+  useEffect(() => {
+    void loadSummaries().catch((err) => setError(errorMessage(err)));
+  }, []);
+
+  async function runAutomation(label: string, fn: () => Promise<void>) {
+    setBusy(label);
+    setError('');
+    setNotice('');
+    try {
+      await fn();
+      setNotice(label);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function submitSync() {
+    return runAutomation('Synced historical candles', async () => {
+      const result = await api.syncHistorical({
+        ...syncForm,
+        instrument_token: Number(syncForm.instrument_token),
+        from: localDateTimeToISO(syncForm.from),
+        to: localDateTimeToISO(syncForm.to),
+      });
+      setNotice(`Stored ${result.candles_stored} candles`);
+      const loaded = await api.historicalCandles({
+        exchange: syncForm.exchange,
+        tradingsymbol: syncForm.tradingsymbol,
+        interval: syncForm.interval,
+        from: localDateTimeToISO(syncForm.from),
+        to: localDateTimeToISO(syncForm.to),
+      });
+      setCandles(loaded.slice(-25));
+    });
+  }
+
+  function submitBacktest() {
+    return runAutomation('Ran backtest', async () => {
+      const result = await api.runBacktest({
+        ...backtestForm,
+        from: localDateTimeToISO(backtestForm.from),
+        to: localDateTimeToISO(backtestForm.to),
+        quantity: Number(backtestForm.quantity),
+        multiplier: Number(backtestForm.multiplier),
+        stop_loss_points: Number(backtestForm.stop_loss_points),
+        target_points: Number(backtestForm.target_points),
+        entry_buffer_points: Number(backtestForm.entry_buffer_points),
+        slippage_points: Number(backtestForm.slippage_points),
+        brokerage_per_trade: Number(backtestForm.brokerage_per_trade),
+      });
+      setLatest(result);
+      await loadSummaries();
+    });
+  }
+
+  function searchHistoricalInstruments() {
+    return runAutomation('Searched instruments', async () => {
+      setHistoricalInstruments(await api.historicalInstruments({
+        ...instrumentSearch,
+        limit: Number(instrumentSearch.limit),
+      }));
+    });
+  }
+
+  function useHistoricalInstrument(item: HistoricalInstrument) {
+    const lotSize = item.lot_size > 0 ? item.lot_size : 1;
+    setSyncForm({
+      ...syncForm,
+      exchange: item.exchange,
+      tradingsymbol: item.tradingsymbol,
+      instrument_token: item.instrument_token,
+    });
+    setBacktestForm({
+      ...backtestForm,
+      exchange: item.exchange,
+      tradingsymbol: item.tradingsymbol,
+      quantity: lotSize,
+      multiplier: item.exchange === 'MCX' && item.lot_size > 0 ? item.lot_size : backtestForm.multiplier,
+    });
+  }
+
+  function openBacktest(id: string) {
+    return runAutomation('Loaded backtest', async () => {
+      setLatest(await api.backtest(id));
+    });
+  }
+
+  return (
+    <div className="stacked-layout">
+      {error && <Toast tone="danger" message={error} onClose={() => setError('')} />}
+      {notice && <Toast tone="success" message={notice} onClose={() => setNotice('')} />}
+      <section className="panel-grid two">
+        <div className="panel">
+          <PanelTitle icon={<Crosshair />} title="Instrument Token Lookup" />
+          <FormShell onSubmit={searchHistoricalInstruments}>
+            <div className="form-grid two">
+              <Select label="Exchange" value={instrumentSearch.exchange} options={['NFO', 'BFO', 'MCX']} onChange={(exchange) => setInstrumentSearch({ ...instrumentSearch, exchange })} />
+              <Input label="Underlying" value={instrumentSearch.underlying} onChange={(underlying) => setInstrumentSearch({ ...instrumentSearch, underlying: underlying.toUpperCase() })} />
+              <Input label="Expiry" value={instrumentSearch.expiry} onChange={(expiry) => setInstrumentSearch({ ...instrumentSearch, expiry })} />
+              <Select label="Type" value={instrumentSearch.instrument_type} options={['', 'FUT', 'CE', 'PE']} onChange={(instrument_type) => setInstrumentSearch({ ...instrumentSearch, instrument_type })} />
+              <Input label="Symbol Contains" value={instrumentSearch.tradingsymbol} onChange={(tradingsymbol) => setInstrumentSearch({ ...instrumentSearch, tradingsymbol: tradingsymbol.toUpperCase() })} />
+              <Input label="Limit" type="number" min={1} step={1} value={instrumentSearch.limit} onChange={(value) => setInstrumentSearch({ ...instrumentSearch, limit: Number(value) })} />
+            </div>
+            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Searched instruments' ? <Loader2 className="spin" /> : <Crosshair />} Search Cached Instruments</button>
+          </FormShell>
+        </div>
+        <div className="panel">
+          <PanelTitle icon={<RefreshCw />} title="Historical Sync" />
+          <FormShell onSubmit={submitSync}>
+            <div className="form-grid two">
+              <Input label="Exchange" value={syncForm.exchange} onChange={(value) => setSyncForm({ ...syncForm, exchange: value.toUpperCase() })} />
+              <Input label="Symbol" value={syncForm.tradingsymbol} onChange={(value) => setSyncForm({ ...syncForm, tradingsymbol: value.toUpperCase() })} />
+              <Input label="Instrument Token" type="number" min={1} step={1} value={syncForm.instrument_token} onChange={(value) => setSyncForm({ ...syncForm, instrument_token: Number(value) })} />
+              <Select label="Interval" value={syncForm.interval} options={historicalIntervals()} onChange={(interval) => setSyncForm({ ...syncForm, interval })} />
+              <Input label="From" type="datetime-local" value={syncForm.from} onChange={(from) => setSyncForm({ ...syncForm, from })} />
+              <Input label="To" type="datetime-local" value={syncForm.to} onChange={(to) => setSyncForm({ ...syncForm, to })} />
+            </div>
+            <label className="check-row">
+              <input type="checkbox" checked={syncForm.include_oi} onChange={(event) => setSyncForm({ ...syncForm, include_oi: event.target.checked })} />
+              <span>Include OI</span>
+            </label>
+            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Synced historical candles' ? <Loader2 className="spin" /> : <RefreshCw />} Sync Candles</button>
+          </FormShell>
+        </div>
+        <div className="panel">
+          <PanelTitle icon={<BarChart3 />} title="ORB Backtest" />
+          <FormShell onSubmit={submitBacktest}>
+            <div className="form-grid two">
+              <Input label="Exchange" value={backtestForm.exchange} onChange={(value) => setBacktestForm({ ...backtestForm, exchange: value.toUpperCase() })} />
+              <Input label="Symbol" value={backtestForm.tradingsymbol} onChange={(value) => setBacktestForm({ ...backtestForm, tradingsymbol: value.toUpperCase() })} />
+              <Select label="Interval" value={backtestForm.interval} options={historicalIntervals()} onChange={(interval) => setBacktestForm({ ...backtestForm, interval })} />
+              <Select label="Strategy" value={backtestForm.strategy} options={[{ value: 'opening_range_breakout', label: 'Opening Range Breakout' }]} onChange={(strategy) => setBacktestForm({ ...backtestForm, strategy })} />
+              <Input label="From" type="datetime-local" value={backtestForm.from} onChange={(from) => setBacktestForm({ ...backtestForm, from })} />
+              <Input label="To" type="datetime-local" value={backtestForm.to} onChange={(to) => setBacktestForm({ ...backtestForm, to })} />
+              <Input label="Quantity" type="number" min={1} step={1} value={backtestForm.quantity} onChange={(value) => setBacktestForm({ ...backtestForm, quantity: Number(value) })} />
+              <Input label="Multiplier" type="number" min={0} step="0.1" value={backtestForm.multiplier} onChange={(value) => setBacktestForm({ ...backtestForm, multiplier: Number(value) })} />
+              <Input label="SL Points" type="number" min={0} step="0.05" value={backtestForm.stop_loss_points} onChange={(value) => setBacktestForm({ ...backtestForm, stop_loss_points: Number(value) })} />
+              <Input label="Target Points" type="number" min={0} step="0.05" value={backtestForm.target_points} onChange={(value) => setBacktestForm({ ...backtestForm, target_points: Number(value) })} />
+              <Input label="Entry Buffer" type="number" min={0} step="0.05" value={backtestForm.entry_buffer_points} onChange={(value) => setBacktestForm({ ...backtestForm, entry_buffer_points: Number(value) })} />
+              <Input label="Slippage Points" type="number" min={0} step="0.05" value={backtestForm.slippage_points} onChange={(value) => setBacktestForm({ ...backtestForm, slippage_points: Number(value) })} />
+              <Input label="Brokerage/Trade" type="number" min={0} step="1" value={backtestForm.brokerage_per_trade} onChange={(value) => setBacktestForm({ ...backtestForm, brokerage_per_trade: Number(value) })} />
+              <Input label="Range Start" type="time" value={backtestForm.range_start} onChange={(value) => setBacktestForm({ ...backtestForm, range_start: value })} />
+              <Input label="Range End" type="time" value={backtestForm.range_end} onChange={(value) => setBacktestForm({ ...backtestForm, range_end: value })} />
+              <Input label="Exit Time" type="time" value={backtestForm.exit_time} onChange={(value) => setBacktestForm({ ...backtestForm, exit_time: value })} />
+            </div>
+            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Ran backtest' ? <Loader2 className="spin" /> : <BarChart3 />} Run Backtest</button>
+          </FormShell>
+        </div>
+      </section>
+      {historicalInstruments.length > 0 && (
+        <section className="table-section">
+          <PanelTitle icon={<Crosshair />} title="Cached Historical Instruments" />
+          <HistoricalInstrumentTable instruments={historicalInstruments} onUse={useHistoricalInstrument} />
+        </section>
+      )}
+      {latest && <BacktestResultPanel result={latest} />}
+      <section className="table-section">
+        <PanelTitle icon={<ListChecks />} title="Saved Backtests" action={<button className="text-button" onClick={() => void loadSummaries()}>Refresh</button>} />
+        <BacktestSummaryTable summaries={summaries} onOpen={(id) => void openBacktest(id)} />
+        {summaries.length === 0 && <EmptyState label="No backtests yet" />}
+      </section>
+      {candles.length > 0 && (
+        <section className="table-section">
+          <PanelTitle icon={<Clock3 />} title="Recent Stored Candles" />
+          <CandleTable candles={candles} />
+        </section>
+      )}
+    </div>
+  );
+}
+
+function BacktestResultPanel(props: { result: BacktestResult }) {
+  const equityCurve = props.result.equity_curve ?? [];
+  return (
+    <section className="table-section">
+      <PanelTitle icon={<BarChart3 />} title="Latest Backtest" />
+      <DetailGrid rows={[
+        ['ID', <span className="mono">{props.result.id}</span>],
+        ['Symbol', `${props.result.exchange}:${props.result.tradingsymbol}`],
+        ['Strategy', props.result.strategy],
+        ['Trades', props.result.trades.length],
+        ['Net P&L', <PnLValue value={props.result.total_pnl} />],
+        ['Gross P&L', <PnLValue value={props.result.gross_pnl} />],
+        ['Costs', money(props.result.total_costs)],
+        ['Max Drawdown', money(props.result.max_drawdown)],
+        ['Win Rate', `${props.result.win_rate.toFixed(1)}%`],
+        ['Expectancy', <PnLValue value={props.result.expectancy} />],
+        ['Avg Win', <PnLValue value={props.result.avg_win} />],
+        ['Avg Loss', <PnLValue value={props.result.avg_loss} />],
+        ['Candles', props.result.candles_used],
+      ]} />
+      <BacktestTradeTable trades={props.result.trades} />
+      {equityCurve.length > 0 && <EquityCurveTable points={equityCurve.slice(-25)} />}
+    </section>
+  );
+}
+
+function BacktestSummaryTable(props: { summaries: BacktestSummary[]; onOpen: (id: string) => void }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Symbol</th>
+            <th>Strategy</th>
+            <th>Trades</th>
+            <th>Net P&L</th>
+            <th>Costs</th>
+            <th>Expectancy</th>
+            <th>Drawdown</th>
+            <th>Win Rate</th>
+            <th>Generated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.summaries.map((item) => (
+            <tr key={item.id}>
+              <td className="mono">{item.id}</td>
+              <td>{item.exchange}:{item.tradingsymbol}</td>
+              <td>{item.strategy}</td>
+              <td>{item.trades}</td>
+              <td><PnLValue value={item.total_pnl} /></td>
+              <td>{money(item.total_costs)}</td>
+              <td><PnLValue value={item.expectancy} /></td>
+              <td>{money(item.max_drawdown)}</td>
+              <td>{item.win_rate.toFixed(1)}%</td>
+              <td>{formatDateTime(item.generated_at)}</td>
+              <td><button className="text-button" onClick={() => props.onOpen(item.id)}>Open</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BacktestTradeTable(props: { trades: BacktestResult['trades'] }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>Side</th>
+            <th>Entry Price</th>
+            <th>Exit Price</th>
+            <th>Qty</th>
+            <th>Gross</th>
+            <th>Costs</th>
+            <th>Net P&L</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.trades.map((trade, index) => (
+            <tr key={`${trade.entry_time}-${index}`}>
+              <td>{formatDateTime(trade.entry_time)}</td>
+              <td>{formatDateTime(trade.exit_time)}</td>
+              <td><SidePill side={trade.side} /></td>
+              <td>{money(trade.entry)}</td>
+              <td>{money(trade.exit)}</td>
+              <td>{trade.quantity}</td>
+              <td><PnLValue value={trade.gross_pnl} /></td>
+              <td>{money(trade.costs)}</td>
+              <td><PnLValue value={trade.pnl} /></td>
+              <td>{trade.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function HistoricalInstrumentTable(props: { instruments: HistoricalInstrument[]; onUse: (item: HistoricalInstrument) => void }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Token</th>
+            <th>Symbol</th>
+            <th>Underlying</th>
+            <th>Expiry</th>
+            <th>Type</th>
+            <th>Strike</th>
+            <th>Lot</th>
+            <th>Tick</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.instruments.map((item) => (
+            <tr key={`${item.exchange}-${item.instrument_token}`}>
+              <td className="mono">{item.instrument_token}</td>
+              <td>{item.exchange}:{item.tradingsymbol}</td>
+              <td>{item.underlying || '-'}</td>
+              <td>{item.expiry || '-'}</td>
+              <td>{item.instrument_type}</td>
+              <td>{item.strike ? money(item.strike) : '-'}</td>
+              <td>{item.lot_size || '-'}</td>
+              <td>{item.tick_size || '-'}</td>
+              <td><button className="text-button" onClick={() => props.onUse(item)}>Use</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function EquityCurveTable(props: { points: BacktestResult['equity_curve'] }) {
+  const points = props.points ?? [];
+  return (
+    <div className="table-wrap compact-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Exit Time</th>
+            <th>Equity</th>
+            <th>Drawdown</th>
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((point, index) => (
+            <tr key={`${point.time}-${index}`}>
+              <td>{formatDateTime(point.time)}</td>
+              <td><PnLValue value={point.equity} /></td>
+              <td>{money(point.drawdown)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CandleTable(props: { candles: Candle[] }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Close</th>
+            <th>Volume</th>
+            <th>OI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.candles.map((candle) => (
+            <tr key={candle.time}>
+              <td>{formatDateTime(candle.time)}</td>
+              <td>{money(candle.open)}</td>
+              <td>{money(candle.high)}</td>
+              <td>{money(candle.low)}</td>
+              <td>{money(candle.close)}</td>
+              <td>{candle.volume}</td>
+              <td>{candle.oi ?? '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1684,8 +2117,13 @@ function titleFor(view: View) {
     case 'orders': return 'Orderbook';
     case 'trades': return 'Managed Trades';
     case 'conflicts': return 'Needs Attention';
+    case 'automation': return 'Automation';
     default: return 'Dashboard';
   }
+}
+
+function historicalIntervals() {
+  return ['minute', '3minute', '5minute', '10minute', '15minute', '30minute', '60minute', 'day'];
 }
 
 function optionLabel(contract: OptionContract) {
@@ -2059,6 +2497,11 @@ function formatDateTime(value: string) {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function localDateTimeToISO(value: string) {
+  if (!value) return '';
+  return new Date(value).toISOString();
 }
 
 function money(value?: number) {

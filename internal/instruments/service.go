@@ -69,6 +69,28 @@ type FutureContractsResponse struct {
 	Contracts  []FutureContract `json:"contracts"`
 }
 
+type HistoricalInstrument struct {
+	InstrumentToken uint32  `json:"instrument_token"`
+	Exchange        string  `json:"exchange"`
+	TradingSymbol   string  `json:"tradingsymbol"`
+	Underlying      string  `json:"underlying,omitempty"`
+	Expiry          string  `json:"expiry,omitempty"`
+	Strike          float64 `json:"strike,omitempty"`
+	InstrumentType  string  `json:"instrument_type"`
+	Segment         string  `json:"segment"`
+	LotSize         int     `json:"lot_size"`
+	TickSize        float64 `json:"tick_size"`
+}
+
+type HistoricalInstrumentFilter struct {
+	Exchange       string
+	Underlying     string
+	Expiry         string
+	InstrumentType string
+	TradingSymbol  string
+	Limit          int
+}
+
 type OptionContractsResponse struct {
 	Exchange      string           `json:"exchange"`
 	Underlying    string           `json:"underlying"`
@@ -209,6 +231,70 @@ func (s *Service) Futures(exchange, underlying, product string) (*FutureContract
 		Underlying: underlying,
 		Contracts:  contracts,
 	}, nil
+}
+
+func (s *Service) HistoricalInstruments(filter HistoricalInstrumentFilter) ([]HistoricalInstrument, error) {
+	filter.Exchange = normalizeExchange(filter.Exchange)
+	filter.Underlying = strings.ToUpper(strings.TrimSpace(filter.Underlying))
+	filter.Expiry = strings.TrimSpace(filter.Expiry)
+	filter.InstrumentType = strings.ToUpper(strings.TrimSpace(filter.InstrumentType))
+	filter.TradingSymbol = strings.ToUpper(strings.TrimSpace(filter.TradingSymbol))
+	if filter.Limit <= 0 || filter.Limit > 500 {
+		filter.Limit = 100
+	}
+	items, err := s.load(filter.Exchange)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HistoricalInstrument, 0)
+	for _, item := range items {
+		if filter.TradingSymbol != "" && !strings.Contains(item.TradingSymbol, filter.TradingSymbol) {
+			continue
+		}
+		if filter.InstrumentType != "" && item.InstrumentType != filter.InstrumentType {
+			continue
+		}
+		if filter.Expiry != "" && item.Expiry != filter.Expiry {
+			continue
+		}
+		underlying := historicalUnderlyingName(item)
+		if filter.Underlying != "" && !strings.EqualFold(underlying, filter.Underlying) && !strings.HasPrefix(item.TradingSymbol, filter.Underlying) {
+			continue
+		}
+		out = append(out, HistoricalInstrument{
+			InstrumentToken: item.InstrumentToken,
+			Exchange:        item.Exchange,
+			TradingSymbol:   item.TradingSymbol,
+			Underlying:      underlying,
+			Expiry:          item.Expiry,
+			Strike:          item.Strike,
+			InstrumentType:  item.InstrumentType,
+			Segment:         item.Segment,
+			LotSize:         item.LotSize,
+			TickSize:        item.TickSize,
+		})
+		if len(out) >= filter.Limit {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Expiry != out[j].Expiry {
+			left, leftOK := parseDate(out[i].Expiry)
+			right, rightOK := parseDate(out[j].Expiry)
+			if leftOK && rightOK {
+				return left.Before(right)
+			}
+			return out[i].Expiry < out[j].Expiry
+		}
+		if out[i].Underlying != out[j].Underlying {
+			return out[i].Underlying < out[j].Underlying
+		}
+		if out[i].Strike != out[j].Strike {
+			return out[i].Strike < out[j].Strike
+		}
+		return out[i].TradingSymbol < out[j].TradingSymbol
+	})
+	return out, nil
 }
 
 type OptionFilter struct {
@@ -400,6 +486,13 @@ func futureUnderlyingName(item kite.Instrument) string {
 	return strings.TrimRightFunc(symbol, func(r rune) bool {
 		return (r >= '0' && r <= '9') || r == '.'
 	})
+}
+
+func historicalUnderlyingName(item kite.Instrument) string {
+	if isFuture(item) {
+		return futureUnderlyingName(item)
+	}
+	return underlyingName(item)
 }
 
 func matchesUnderlying(item kite.Instrument, underlying string) bool {

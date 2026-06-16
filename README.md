@@ -216,6 +216,85 @@ Docs:
 
 For now this app uses conservative batched REST polling for the UI and keeps Kite WebSocket parked for the next realtime phase.
 
+### Historical Data And Automation Starter
+
+Automation and backtesting code lives separately under `internal/automation` so it does not mix with live trade-management logic.
+
+Use Kite historical candles to sync a specific instrument/date range into local JSON storage:
+
+```bash
+curl -X POST http://127.0.0.1:8080/historical/sync \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "exchange": "MCX",
+    "tradingsymbol": "SILVERM26JUNFUT",
+    "instrument_token": 118822663,
+    "interval": "minute",
+    "from": "2026-06-01T09:00:00+05:30",
+    "to": "2026-06-30T23:30:00+05:30",
+    "include_oi": true
+  }'
+```
+
+Candles are stored by month under:
+
+```text
+data/historical/<EXCHANGE>/<TRADINGSYMBOL>/<interval>_<YYYY_MM>.json
+```
+
+Supported starter intervals are `minute`, `3minute`, `5minute`, `10minute`, `15minute`, `30minute`, `60minute`, and `day`. Historical sync needs the correct `instrument_token`; expired F&O contracts need previously cached token metadata or another reliable token registry.
+
+Search the latest cached Kite instrument master for a token before syncing:
+
+```bash
+curl "http://127.0.0.1:8080/historical/instruments?exchange=MCX&underlying=SILVERM&instrument_type=FUT&limit=25"
+```
+
+This search works from files created by `POST /instruments/sync?exchange=<EXCHANGE>`. It is good for current cached contracts. A durable token registry for expired F&O contracts is still a later database-backed task.
+
+Read stored candles:
+
+```bash
+curl "http://127.0.0.1:8080/historical/candles?exchange=MCX&tradingsymbol=SILVERM26JUNFUT&interval=minute&from=2026-06-01T09:00:00%2B05:30&to=2026-06-30T23:30:00%2B05:30"
+```
+
+Run the starter opening-range breakout backtest:
+
+```bash
+curl -X POST http://127.0.0.1:8080/backtests \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "exchange": "MCX",
+    "tradingsymbol": "SILVERM26JUNFUT",
+    "interval": "minute",
+    "from": "2026-06-01T09:00:00+05:30",
+    "to": "2026-06-30T23:30:00+05:30",
+    "strategy": "opening_range_breakout",
+    "quantity": 1,
+    "multiplier": 5,
+    "stop_loss_points": 500,
+    "target_points": 1000,
+    "entry_buffer_points": 0,
+    "slippage_points": 0.5,
+    "brokerage_per_trade": 40,
+    "range_start": "09:15",
+    "range_end": "09:30",
+    "exit_time": "15:20"
+  }'
+```
+
+Backtest P&L uses `price_diff * quantity * multiplier`, then subtracts `brokerage_per_trade` from each completed trade. `slippage_points` worsens both entry and exit prices. Backtest results include gross P&L, total costs, net P&L, max drawdown, win rate, expectancy, average win/loss, and an equity curve. Results are stored under `data/backtests/`. Use `GET /backtests` to list summaries and `GET /backtests/<id>` for the full trade list.
+
+The frontend has an `Automation` page for the same flow:
+
+- sync historical candles
+- search cached instruments and apply the token to sync/backtest forms
+- run the opening-range breakout backtest
+- view saved backtest summaries
+- inspect the latest backtest trades, costs, expectancy, and equity curve
+
+Kite MCP can be useful later as an AI assistant layer for portfolio/market analysis and strategy exploration. Zerodha's MCP article says MCP currently focuses on market data and portfolio analysis; order placement, historical trade data, portfolio data, and some other features are unavailable at this time. For this app, Kite Connect remains the execution and persistent-system integration path, while MCP is a possible future assistant interface over our own backend.
+
 ### 8. Logs And Persistence
 
 Trades, synced orderbook snapshots, synced position snapshots, and instrument cache files are stored under `data/` by default. Examples:

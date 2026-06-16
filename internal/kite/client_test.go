@@ -3,6 +3,7 @@ package kite
 import (
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestSafeFormValuesRedactsSensitiveFields(t *testing.T) {
@@ -29,5 +30,27 @@ func TestSafeFormValuesRedactsSensitiveFields(t *testing.T) {
 	}
 	if fields["quantity"] != "1" {
 		t.Fatalf("expected quantity to remain visible, got %q", fields["quantity"])
+	}
+}
+
+func TestParseHistoricalCandle(t *testing.T) {
+	candle, err := parseHistoricalCandle([]any{
+		"2026-06-16T09:15:00+0530",
+		float64(100),
+		float64(110),
+		float64(95),
+		float64(105),
+		float64(1234),
+		float64(456),
+	})
+	if err != nil {
+		t.Fatalf("parseHistoricalCandle failed: %v", err)
+	}
+	expected := time.Date(2026, 6, 16, 3, 45, 0, 0, time.UTC)
+	if !candle.Time.Equal(expected) {
+		t.Fatalf("expected UTC time %s, got %s", expected, candle.Time)
+	}
+	if candle.Open != 100 || candle.High != 110 || candle.Low != 95 || candle.Close != 105 || candle.Volume != 1234 || candle.OI != 456 {
+		t.Fatalf("unexpected candle: %+v", candle)
 	}
 }

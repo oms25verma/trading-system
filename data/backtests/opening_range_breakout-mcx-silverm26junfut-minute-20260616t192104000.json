@@ -1,0 +1,18 @@
+{
+  "id": "opening_range_breakout-mcx-silverm26junfut-minute-20260616t192104000",
+  "strategy": "opening_range_breakout",
+  "exchange": "MCX",
+  "tradingsymbol": "SILVERM26JUNFUT",
+  "interval": "minute",
+  "trades": null,
+  "total_pnl": 0,
+  "gross_pnl": 0,
+  "total_costs": 0,
+  "max_drawdown": 0,
+  "win_rate": 0,
+  "expectancy": 0,
+  "avg_win": 0,
+  "avg_loss": 0,
+  "candles_used": 0,
+  "generated_at": "2026-06-16T19:21:04.154514Z"
+}

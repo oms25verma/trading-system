@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"trading-system/internal/automation"
 	"trading-system/internal/config"
 	"trading-system/internal/instruments"
 	"trading-system/internal/kite"
@@ -300,6 +301,65 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		result, err := instrumentService.Options(r.Context(), optionFilterFromQuery(r))
 		writeInstrumentResult(r.Context(), w, result, err)
 	})
+	mux.HandleFunc("GET /historical/instruments", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		result, err := instrumentService.HistoricalInstruments(instruments.HistoricalInstrumentFilter{
+			Exchange:       query.Get("exchange"),
+			Underlying:     query.Get("underlying"),
+			Expiry:         query.Get("expiry"),
+			InstrumentType: query.Get("instrument_type"),
+			TradingSymbol:  query.Get("tradingsymbol"),
+			Limit:          intQuery(query.Get("limit")),
+		})
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	candleStore := automation.NewJSONCandleStore(cfg.TradeStorePath)
+	automationService := automation.NewServiceWithBacktests(kiteHistoricalSource{client: kiteClient}, candleStore, automation.NewJSONBacktestStore(cfg.TradeStorePath))
+	mux.HandleFunc("POST /historical/sync", func(w http.ResponseWriter, r *http.Request) {
+		var req automation.HistoricalRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		result, err := automationService.SyncHistorical(r.Context(), req)
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /historical/candles", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		from, err := parseAPITime(query.Get("from"))
+		if err != nil {
+			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "invalid_from", Message: err.Error()})
+			return
+		}
+		to, err := parseAPITime(query.Get("to"))
+		if err != nil {
+			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "invalid_to", Message: err.Error()})
+			return
+		}
+		result, err := automationService.ListCandles(automation.CandleListRequest{
+			Exchange:      query.Get("exchange"),
+			TradingSymbol: query.Get("tradingsymbol"),
+			Interval:      query.Get("interval"),
+			From:          from,
+			To:            to,
+		})
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("POST /backtests", func(w http.ResponseWriter, r *http.Request) {
+		var req automation.BacktestRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		result, err := automationService.RunBacktest(req)
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /backtests", func(w http.ResponseWriter, r *http.Request) {
+		result, err := automationService.ListBacktests()
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /backtests/{id}", func(w http.ResponseWriter, r *http.Request) {
+		result, err := automationService.GetBacktest(r.PathValue("id"))
+		writeResult(r.Context(), w, result, err)
+	})
 	mux.HandleFunc("GET /market/ltp", func(w http.ResponseWriter, r *http.Request) {
 		if broker == nil {
 			writeError(r.Context(), w, &trading.DomainError{Kind: trading.ErrorKindValidation, Code: "broker_unavailable", Message: "broker is not available for LTP"})
@@ -583,6 +643,27 @@ func intQuery(raw string) int {
 	return value
 }
 
+func parseAPITime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, errors.New("time value is required")
+	}
+	layouts := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	var lastErr error
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed, nil
+		}
+		lastErr = err
+	}
+	return time.Time{}, lastErr
+}
+
 func watchlistAllows(req trading.CreateTradeRequest, items []config.SymbolWatchItem) bool {
 	for _, item := range items {
 		if strings.EqualFold(item.Exchange, req.Exchange) &&
@@ -610,6 +691,40 @@ func liveKitePositions(positions []trading.Position) []*trading.KitePosition {
 		})
 	}
 	return out
+}
+
+type kiteHistoricalSource struct {
+	client *kite.Client
+}
+
+func (s kiteHistoricalSource) FetchHistorical(ctx context.Context, req automation.HistoricalRequest) ([]automation.Candle, error) {
+	if s.client == nil {
+		return nil, errors.New("kite client is not configured")
+	}
+	candles, err := s.client.HistoricalCandles(ctx, kite.HistoricalRequest{
+		InstrumentToken: req.InstrumentToken,
+		Interval:        req.Interval,
+		From:            req.From,
+		To:              req.To,
+		Continuous:      req.Continuous,
+		IncludeOI:       req.IncludeOI,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]automation.Candle, 0, len(candles))
+	for _, candle := range candles {
+		out = append(out, automation.Candle{
+			Time:   candle.Time,
+			Open:   candle.Open,
+			High:   candle.High,
+			Low:    candle.Low,
+			Close:  candle.Close,
+			Volume: candle.Volume,
+			OI:     candle.OI,
+		})
+	}
+	return out, nil
 }
 
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
