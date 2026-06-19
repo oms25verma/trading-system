@@ -75,6 +75,8 @@ type capabilityMetadata struct {
 	DatabasePersistence       bool `json:"database_persistence"`
 	KillSwitch                bool `json:"kill_switch"`
 	Analytics                 bool `json:"analytics"`
+	PaperAutomation           bool `json:"paper_automation"`
+	LiveAutomation            bool `json:"live_automation"`
 }
 
 func buildMetadata(cfg config.Config) metadataResponse {
@@ -158,6 +160,8 @@ func buildMetadata(cfg config.Config) metadataResponse {
 			ExternalPositionTakeover:  true,
 			ExternalExitManualLinking: true,
 			PollingOCO:                true,
+			PaperAutomation:           true,
+			LiveAutomation:            false,
 			KillSwitch:                false,
 			DatabasePersistence:       false,
 			Analytics:                 false,
@@ -202,16 +206,20 @@ func endpointMap() map[string][]string {
 		"/conflicts":                            {"GET"},
 		"/sync/kite":                            {"POST"},
 		"/instruments/sync":                     {"POST"},
+		"/instruments/cache-status":             {"GET"},
 		"/instruments/underlyings":              {"GET"},
 		"/instruments/expiries":                 {"GET"},
 		"/instruments/future-underlyings":       {"GET"},
 		"/instruments/futures":                  {"GET"},
 		"/instruments/options":                  {"GET"},
 		"/historical/instruments":               {"GET"},
+		"/historical/underlyings":               {"GET"},
 		"/historical/sync":                      {"POST"},
 		"/historical/candles":                   {"GET"},
 		"/backtests":                            {"GET", "POST"},
 		"/backtests/{id}":                       {"GET"},
+		"/paper-runs":                           {"GET", "POST"},
+		"/paper-runs/{id}":                      {"GET"},
 		"/market/ltp":                           {"GET"},
 		"/market/groups":                        {"GET"},
 		"/kite/login":                           {"GET"},

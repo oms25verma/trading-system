@@ -115,7 +115,18 @@ export interface InstrumentSyncResult {
   exchange: string;
   count: number;
   path: string;
+  registry_path?: string;
+  registry_count?: number;
   synced_at: string;
+}
+
+export interface InstrumentCacheStatus {
+  exchange: string;
+  cached: boolean;
+  path?: string;
+  count?: number;
+  synced_at?: string;
+  registry_count?: number;
 }
 
 export interface OptionContract {
@@ -320,6 +331,15 @@ export interface HistoricalInstrument {
   segment: string;
   lot_size: number;
   tick_size: number;
+  first_seen?: string;
+  last_seen?: string;
+}
+
+export interface HistoricalUnderlying {
+  exchange: string;
+  underlying: string;
+  instrument_types: string[];
+  count: number;
 }
 
 export interface BacktestRequest {
@@ -393,6 +413,50 @@ export interface BacktestSummary {
   max_drawdown: number;
   win_rate: number;
   expectancy: number;
+  generated_at: string;
+}
+
+export interface Guardrails {
+  mandatory_protection: boolean;
+  max_trades_per_day?: number;
+  max_daily_loss?: number;
+  no_entry_after?: string;
+  kill_switch: boolean;
+  manual_override: boolean;
+}
+
+export interface PaperRunRequest extends BacktestRequest {
+  guardrails: Guardrails;
+}
+
+export interface GuardrailViolation {
+  code: string;
+  message: string;
+  day?: string;
+  value?: number;
+  limit?: number;
+}
+
+export interface PaperRunResult {
+  id: string;
+  status: 'READY' | 'BLOCKED' | 'VIOLATION' | string;
+  reason?: string;
+  request: PaperRunRequest;
+  backtest?: BacktestResult;
+  violations?: GuardrailViolation[];
+  generated_at: string;
+}
+
+export interface PaperRunSummary {
+  id: string;
+  status: string;
+  strategy: string;
+  exchange: string;
+  tradingsymbol: string;
+  interval: string;
+  trades: number;
+  total_pnl: number;
+  violations: number;
   generated_at: string;
 }
 

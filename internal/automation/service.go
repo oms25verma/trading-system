@@ -11,10 +11,16 @@ type HistoricalSource interface {
 	FetchHistorical(ctx context.Context, req HistoricalRequest) ([]Candle, error)
 }
 
+type HistoricalInstrumentValidator interface {
+	ValidateHistoricalInstrument(exchange, tradingSymbol string, instrumentToken int64) error
+}
+
 type Service struct {
 	source        HistoricalSource
 	store         CandleStore
 	backtestStore BacktestStore
+	paperRunStore PaperRunStore
+	validator     HistoricalInstrumentValidator
 }
 
 func NewService(source HistoricalSource, store CandleStore) *Service {
@@ -23,6 +29,18 @@ func NewService(source HistoricalSource, store CandleStore) *Service {
 
 func NewServiceWithBacktests(source HistoricalSource, store CandleStore, backtestStore BacktestStore) *Service {
 	return &Service{source: source, store: store, backtestStore: backtestStore}
+}
+
+func NewServiceWithStores(source HistoricalSource, store CandleStore, backtestStore BacktestStore, paperRunStore PaperRunStore) *Service {
+	return &Service{source: source, store: store, backtestStore: backtestStore, paperRunStore: paperRunStore}
+}
+
+func NewServiceWithValidator(source HistoricalSource, store CandleStore, validator HistoricalInstrumentValidator) *Service {
+	return &Service{source: source, store: store, validator: validator}
+}
+
+func (s *Service) SetHistoricalInstrumentValidator(validator HistoricalInstrumentValidator) {
+	s.validator = validator
 }
 
 func (s *Service) SyncHistorical(ctx context.Context, req HistoricalRequest) (*HistoricalSyncResult, error) {
@@ -35,6 +53,11 @@ func (s *Service) SyncHistorical(ctx context.Context, req HistoricalRequest) (*H
 	req = normalizeHistoricalRequest(req)
 	if err := validateHistoricalRequest(req); err != nil {
 		return nil, err
+	}
+	if s.validator != nil {
+		if err := s.validator.ValidateHistoricalInstrument(req.Exchange, req.TradingSymbol, req.InstrumentToken); err != nil {
+			return nil, err
+		}
 	}
 	candles, err := s.source.FetchHistorical(ctx, req)
 	if err != nil {
@@ -107,6 +130,33 @@ func (s *Service) GetBacktest(id string) (*BacktestResult, error) {
 		return nil, fmt.Errorf("backtest store is not configured")
 	}
 	return s.backtestStore.Get(id)
+}
+
+func (s *Service) RunPaper(req PaperRunRequest) (*PaperRunResult, error) {
+	result, err := RunPaper(s.store, req)
+	if err != nil {
+		return nil, err
+	}
+	if s.paperRunStore != nil {
+		if _, err := s.paperRunStore.Save(result); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) ListPaperRuns() ([]PaperRunSummary, error) {
+	if s.paperRunStore == nil {
+		return nil, fmt.Errorf("paper run store is not configured")
+	}
+	return s.paperRunStore.List()
+}
+
+func (s *Service) GetPaperRun(id string) (*PaperRunResult, error) {
+	if s.paperRunStore == nil {
+		return nil, fmt.Errorf("paper run store is not configured")
+	}
+	return s.paperRunStore.Get(id)
 }
 
 func normalizeHistoricalRequest(req HistoricalRequest) HistoricalRequest {

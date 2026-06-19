@@ -198,6 +198,15 @@ func TestTeeHandlerPreservesAttrsAndGroups(t *testing.T) {
 	}
 }
 
+func TestInstrumentCacheMissingLogsAsAPIError(t *testing.T) {
+	if isExpectedAPIRejection(apiError{Kind: string(trading.ErrorKindValidation), Code: "instrument_cache_missing"}) {
+		t.Fatal("instrument cache misses should be warning-level so they reach error.log")
+	}
+	if !isExpectedAPIRejection(apiError{Kind: string(trading.ErrorKindValidation), Code: "invalid_quantity"}) {
+		t.Fatal("ordinary validation errors should remain expected rejects")
+	}
+}
+
 func TestOpenAPIRouteReturnsPathMap(t *testing.T) {
 	manager := newHTTPTestManager(t)
 	handler := routes(manager, kite.NewClient("", "", ""), config.Config{})

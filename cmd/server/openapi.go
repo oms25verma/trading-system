@@ -119,6 +119,9 @@ func requestSchema(method, path string) string {
 	if method == "POST" && path == "/backtests" {
 		return "BacktestRequest"
 	}
+	if method == "POST" && path == "/paper-runs" {
+		return "PaperRunRequest"
+	}
 	return ""
 }
 
@@ -136,12 +139,24 @@ func responseSchema(method, path string) string {
 		return "CandleList"
 	case path == "/historical/instruments":
 		return "HistoricalInstrumentList"
+	case path == "/historical/underlyings":
+		return "HistoricalUnderlyingList"
+	case path == "/instruments/sync":
+		return "InstrumentSyncResult"
+	case path == "/instruments/cache-status":
+		return "InstrumentCacheStatusList"
 	case path == "/backtests" && method == "POST":
 		return "BacktestResult"
 	case path == "/backtests" && method == "GET":
 		return "BacktestSummaryList"
 	case path == "/backtests/{id}":
 		return "BacktestResult"
+	case path == "/paper-runs" && method == "POST":
+		return "PaperRunResult"
+	case path == "/paper-runs" && method == "GET":
+		return "PaperRunSummaryList"
+	case path == "/paper-runs/{id}":
+		return "PaperRunResult"
 	case path == "/trades" && method == "GET":
 		return "ManagedTradeList"
 	case strings.HasPrefix(path, "/trades"):
@@ -249,6 +264,14 @@ func componentSchemas() map[string]any {
 			"segment":          stringSchema(),
 			"lot_size":         integerSchema(),
 			"tick_size":        numberSchema(),
+			"first_seen":       stringSchema(),
+			"last_seen":        stringSchema(),
+		}),
+		"HistoricalUnderlying": objectSchema(nil, map[string]any{
+			"exchange":         stringSchema(),
+			"underlying":       stringSchema(),
+			"instrument_types": arraySchema(stringSchema()),
+			"count":            integerSchema(),
 		}),
 		"Candle": objectSchema(nil, map[string]any{
 			"time":   stringSchema(),
@@ -326,6 +349,61 @@ func componentSchemas() map[string]any {
 			"max_drawdown":  numberSchema(),
 			"win_rate":      numberSchema(),
 			"expectancy":    numberSchema(),
+			"generated_at":  stringSchema(),
+		}),
+		"Guardrails": objectSchema(nil, map[string]any{
+			"mandatory_protection": boolSchema(),
+			"max_trades_per_day":   integerSchema(),
+			"max_daily_loss":       numberSchema(),
+			"no_entry_after":       stringSchema(),
+			"kill_switch":          boolSchema(),
+			"manual_override":      boolSchema(),
+		}),
+		"PaperRunRequest": objectSchema([]string{"exchange", "tradingsymbol", "interval", "from", "to", "strategy"}, map[string]any{
+			"exchange":            stringSchema(),
+			"tradingsymbol":       stringSchema(),
+			"interval":            enumSchema("minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "day"),
+			"from":                stringSchema(),
+			"to":                  stringSchema(),
+			"strategy":            enumSchema("opening_range_breakout", "orb", "none"),
+			"quantity":            integerSchema(),
+			"multiplier":          numberSchema(),
+			"stop_loss_points":    numberSchema(),
+			"target_points":       numberSchema(),
+			"entry_buffer_points": numberSchema(),
+			"slippage_points":     numberSchema(),
+			"brokerage_per_trade": numberSchema(),
+			"range_start":         stringSchema(),
+			"range_end":           stringSchema(),
+			"exit_time":           stringSchema(),
+			"guardrails":          schemaRef("Guardrails"),
+		}),
+		"GuardrailViolation": objectSchema(nil, map[string]any{
+			"code":    stringSchema(),
+			"message": stringSchema(),
+			"day":     stringSchema(),
+			"value":   numberSchema(),
+			"limit":   numberSchema(),
+		}),
+		"PaperRunResult": objectSchema(nil, map[string]any{
+			"id":           stringSchema(),
+			"status":       stringSchema(),
+			"reason":       stringSchema(),
+			"request":      schemaRef("PaperRunRequest"),
+			"backtest":     schemaRef("BacktestResult"),
+			"violations":   arraySchema(schemaRef("GuardrailViolation")),
+			"generated_at": stringSchema(),
+		}),
+		"PaperRunSummary": objectSchema(nil, map[string]any{
+			"id":            stringSchema(),
+			"status":        stringSchema(),
+			"strategy":      stringSchema(),
+			"exchange":      stringSchema(),
+			"tradingsymbol": stringSchema(),
+			"interval":      stringSchema(),
+			"trades":        integerSchema(),
+			"total_pnl":     numberSchema(),
+			"violations":    integerSchema(),
 			"generated_at":  stringSchema(),
 		}),
 		"ManagedTrade": objectSchema(nil, map[string]any{
@@ -438,6 +516,23 @@ func componentSchemas() map[string]any {
 			"local_system_orders":          integerSchema(),
 			"external_orders":              integerSchema(),
 		}),
+		"InstrumentSyncResult": objectSchema(nil, map[string]any{
+			"exchange":       stringSchema(),
+			"count":          integerSchema(),
+			"path":           stringSchema(),
+			"registry_path":  stringSchema(),
+			"registry_count": integerSchema(),
+			"synced_at":      dateTimeSchema(),
+			"expires_at":     dateTimeSchema(),
+		}),
+		"InstrumentCacheStatus": objectSchema(nil, map[string]any{
+			"exchange":       stringSchema(),
+			"cached":         boolSchema(),
+			"path":           stringSchema(),
+			"count":          integerSchema(),
+			"synced_at":      dateTimeSchema(),
+			"registry_count": integerSchema(),
+		}),
 		"DashboardSummary": objectSchema(nil, map[string]any{
 			"risk_status":      stringSchema(),
 			"active_groups":    integerSchema(),
@@ -457,13 +552,16 @@ func componentSchemas() map[string]any {
 			"order": schemaRef("KiteOrder"),
 			"trade": schemaRef("ManagedTrade"),
 		}),
-		"ManagedTradeList":         arraySchema(schemaRef("ManagedTrade")),
-		"PositionGroupList":        arraySchema(schemaRef("PositionGroup")),
-		"KiteOrderList":            arraySchema(schemaRef("KiteOrder")),
-		"KitePositionList":         arraySchema(schemaRef("KitePosition")),
-		"CandleList":               arraySchema(schemaRef("Candle")),
-		"HistoricalInstrumentList": arraySchema(schemaRef("HistoricalInstrument")),
-		"BacktestSummaryList":      arraySchema(schemaRef("BacktestSummary")),
+		"ManagedTradeList":          arraySchema(schemaRef("ManagedTrade")),
+		"PositionGroupList":         arraySchema(schemaRef("PositionGroup")),
+		"KiteOrderList":             arraySchema(schemaRef("KiteOrder")),
+		"KitePositionList":          arraySchema(schemaRef("KitePosition")),
+		"CandleList":                arraySchema(schemaRef("Candle")),
+		"HistoricalInstrumentList":  arraySchema(schemaRef("HistoricalInstrument")),
+		"HistoricalUnderlyingList":  arraySchema(schemaRef("HistoricalUnderlying")),
+		"InstrumentCacheStatusList": arraySchema(schemaRef("InstrumentCacheStatus")),
+		"BacktestSummaryList":       arraySchema(schemaRef("BacktestSummary")),
+		"PaperRunSummaryList":       arraySchema(schemaRef("PaperRunSummary")),
 	}
 }
 

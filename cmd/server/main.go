@@ -281,8 +281,21 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		result, err := instrumentService.Sync(r.Context(), r.URL.Query().Get("exchange"))
 		writeInstrumentResult(r.Context(), w, result, err)
 	})
+	mux.HandleFunc("GET /instruments/cache-status", func(w http.ResponseWriter, r *http.Request) {
+		result, err := instrumentService.CacheStatuses(splitCSV(r.URL.Query().Get("exchanges")))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
 	mux.HandleFunc("GET /instruments/underlyings", func(w http.ResponseWriter, r *http.Request) {
 		result, err := instrumentService.Underlyings(r.URL.Query().Get("exchange"))
+		writeInstrumentResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /historical/underlyings", func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		result, err := instrumentService.HistoricalUnderlyings(instruments.HistoricalUnderlyingFilter{
+			Exchange: query.Get("exchange"),
+			Query:    query.Get("q"),
+			Limit:    intQuery(query.Get("limit")),
+		})
 		writeInstrumentResult(r.Context(), w, result, err)
 	})
 	mux.HandleFunc("GET /instruments/expiries", func(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +327,13 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 		writeInstrumentResult(r.Context(), w, result, err)
 	})
 	candleStore := automation.NewJSONCandleStore(cfg.TradeStorePath)
-	automationService := automation.NewServiceWithBacktests(kiteHistoricalSource{client: kiteClient}, candleStore, automation.NewJSONBacktestStore(cfg.TradeStorePath))
+	automationService := automation.NewServiceWithStores(
+		kiteHistoricalSource{client: kiteClient},
+		candleStore,
+		automation.NewJSONBacktestStore(cfg.TradeStorePath),
+		automation.NewJSONPaperRunStore(cfg.TradeStorePath),
+	)
+	automationService.SetHistoricalInstrumentValidator(instrumentService)
 	mux.HandleFunc("POST /historical/sync", func(w http.ResponseWriter, r *http.Request) {
 		var req automation.HistoricalRequest
 		if !decode(w, r, &req) {
@@ -358,6 +377,22 @@ func routes(manager *trading.Manager, kiteClient *kite.Client, cfg config.Config
 	})
 	mux.HandleFunc("GET /backtests/{id}", func(w http.ResponseWriter, r *http.Request) {
 		result, err := automationService.GetBacktest(r.PathValue("id"))
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("POST /paper-runs", func(w http.ResponseWriter, r *http.Request) {
+		var req automation.PaperRunRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		result, err := automationService.RunPaper(req)
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /paper-runs", func(w http.ResponseWriter, r *http.Request) {
+		result, err := automationService.ListPaperRuns()
+		writeResult(r.Context(), w, result, err)
+	})
+	mux.HandleFunc("GET /paper-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		result, err := automationService.GetPaperRun(r.PathValue("id"))
 		writeResult(r.Context(), w, result, err)
 	})
 	mux.HandleFunc("GET /market/ltp", func(w http.ResponseWriter, r *http.Request) {
@@ -831,6 +866,9 @@ func logAPIError(ctx context.Context, status int, response apiError) {
 }
 
 func isExpectedAPIRejection(response apiError) bool {
+	if response.Code == "instrument_cache_missing" {
+		return false
+	}
 	switch response.Kind {
 	case string(trading.ErrorKindValidation), string(trading.ErrorKindNotFound), string(trading.ErrorKindConflict), string(trading.ErrorKindClosed):
 		return true

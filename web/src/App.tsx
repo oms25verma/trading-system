@@ -32,12 +32,16 @@ import type {
   DashboardSummary,
   FutureContract,
   HistoricalInstrument,
+  HistoricalUnderlying,
+  InstrumentCacheStatus,
   KiteOrder,
   KitePosition,
   LTPResponse,
   ManagedTrade,
   Metadata,
   OptionContract,
+  PaperRunResult,
+  PaperRunSummary,
   PositionGroup,
   Side,
   StopLossRequest,
@@ -646,20 +650,55 @@ function AutomationView() {
     tradingsymbol: '',
     limit: 50,
   });
+  const [guardrailForm, setGuardrailForm] = useState({
+    mandatory_protection: true,
+    max_trades_per_day: 3,
+    max_daily_loss: 5000,
+    no_entry_after: '14:45',
+    kill_switch: false,
+    manual_override: false,
+  });
   const [historicalInstruments, setHistoricalInstruments] = useState<HistoricalInstrument[]>([]);
+  const [cacheStatuses, setCacheStatuses] = useState<InstrumentCacheStatus[]>([]);
+  const [historicalUnderlyings, setHistoricalUnderlyings] = useState<HistoricalUnderlying[]>([]);
+  const [underlyingQuery, setUnderlyingQuery] = useState('');
+  const [underlyingBusy, setUnderlyingBusy] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [summaries, setSummaries] = useState<BacktestSummary[]>([]);
+  const [paperSummaries, setPaperSummaries] = useState<PaperRunSummary[]>([]);
   const [latest, setLatest] = useState<BacktestResult | null>(null);
+  const [latestPaper, setLatestPaper] = useState<PaperRunResult | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const syncInstrumentKey = instrumentKey(syncForm.exchange, syncForm.tradingsymbol, syncForm.instrument_token);
+  const syncInstrumentValid = historicalInstruments.some((item) => instrumentKey(item.exchange, item.tradingsymbol, item.instrument_token) === syncInstrumentKey);
+  const syncInstrumentOptions: SelectOption[] = [
+    { value: '', label: 'Select from lookup results' },
+    ...historicalInstruments
+      .filter((item) => item.exchange === syncForm.exchange)
+      .map((item) => ({
+        value: instrumentKey(item.exchange, item.tradingsymbol, item.instrument_token),
+        label: `${item.exchange}:${item.tradingsymbol} (${item.instrument_token})`,
+      })),
+  ];
+  const selectedCacheStatus = cacheStatuses.find((item) => item.exchange === instrumentSearch.exchange);
+  const selectedExchangeCached = !!selectedCacheStatus?.cached || !!selectedCacheStatus?.registry_count;
+  const exchangeOptions = automationExchangeOptions(cacheStatuses);
 
   async function loadSummaries() {
     setSummaries(await api.backtests());
+    setPaperSummaries(await api.paperRuns());
+  }
+
+  async function loadInstrumentReadiness() {
+    const statuses = await api.instrumentCacheStatus();
+    setCacheStatuses(statuses);
   }
 
   useEffect(() => {
     void loadSummaries().catch((err) => setError(errorMessage(err)));
+    void loadInstrumentReadiness().catch((err) => setError(errorMessage(err)));
   }, []);
 
   async function runAutomation(label: string, fn: () => Promise<void>) {
@@ -678,6 +717,9 @@ function AutomationView() {
 
   function submitSync() {
     return runAutomation('Synced historical candles', async () => {
+      if (!syncInstrumentValid) {
+        throw new Error('Select a valid instrument from the token lookup before syncing candles.');
+      }
       const result = await api.syncHistorical({
         ...syncForm,
         instrument_token: Number(syncForm.instrument_token),
@@ -717,10 +759,100 @@ function AutomationView() {
 
   function searchHistoricalInstruments() {
     return runAutomation('Searched instruments', async () => {
+      if (!selectedExchangeCached) {
+        throw new Error(`${instrumentSearch.exchange} instruments are not synced yet. Sync ${instrumentSearch.exchange} instruments first.`);
+      }
       setHistoricalInstruments(await api.historicalInstruments({
         ...instrumentSearch,
         limit: Number(instrumentSearch.limit),
       }));
+    });
+  }
+
+  function changeInstrumentExchange(exchange: string) {
+    const instrument_type = defaultHistoricalType(exchange);
+    setUnderlyingQuery('');
+    setInstrumentSearch({
+      ...instrumentSearch,
+      exchange,
+      underlying: '',
+      expiry: '',
+      instrument_type,
+      tradingsymbol: '',
+    });
+    setHistoricalInstruments([]);
+    setSyncForm({ ...syncForm, exchange, tradingsymbol: '', instrument_token: 0 });
+    setHistoricalUnderlyings([]);
+    void loadInstrumentReadiness().catch((err) => setError(errorMessage(err)));
+  }
+
+  function changeUnderlyingQuery(value: string) {
+    const query = value.toUpperCase();
+    setUnderlyingQuery(query);
+    setInstrumentSearch({ ...instrumentSearch, underlying: '' });
+    setHistoricalInstruments([]);
+    setHistoricalUnderlyings([]);
+  }
+
+  async function searchUnderlyingOptions() {
+    setUnderlyingBusy(true);
+    setError('');
+    try {
+      if (!selectedExchangeCached) {
+        throw new Error(`${instrumentSearch.exchange} instruments are not synced yet. Sync ${instrumentSearch.exchange} instruments first.`);
+      }
+      if (!shouldLoadHistoricalUnderlyings(instrumentSearch.exchange, underlyingQuery)) {
+        throw new Error('Type at least 2 letters to search underlyings.');
+      }
+      const result = await api.historicalUnderlyings(instrumentSearch.exchange, underlyingQuery, 25);
+      setHistoricalUnderlyings(result);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setUnderlyingBusy(false);
+    }
+  }
+
+  function selectUnderlying(item: HistoricalUnderlying) {
+    setInstrumentSearch({ ...instrumentSearch, underlying: item.underlying });
+    setUnderlyingQuery(item.underlying);
+    setHistoricalUnderlyings([]);
+  }
+
+  function syncSelectedExchange() {
+    return runAutomation(`Synced ${instrumentSearch.exchange} instruments`, async () => {
+      const result = await api.syncInstruments(instrumentSearch.exchange);
+      await loadInstrumentReadiness();
+      setNotice(`Synced ${result.exchange} instruments`);
+    });
+  }
+
+  function paperPayload() {
+    return {
+      ...backtestForm,
+      from: localDateTimeToISO(backtestForm.from),
+      to: localDateTimeToISO(backtestForm.to),
+      quantity: Number(backtestForm.quantity),
+      multiplier: Number(backtestForm.multiplier),
+      stop_loss_points: Number(backtestForm.stop_loss_points),
+      target_points: Number(backtestForm.target_points),
+      entry_buffer_points: Number(backtestForm.entry_buffer_points),
+      slippage_points: Number(backtestForm.slippage_points),
+      brokerage_per_trade: Number(backtestForm.brokerage_per_trade),
+      guardrails: {
+        ...guardrailForm,
+        max_trades_per_day: Number(guardrailForm.max_trades_per_day),
+        max_daily_loss: Number(guardrailForm.max_daily_loss),
+      },
+    };
+  }
+
+  function submitPaperRun() {
+    return runAutomation('Ran paper check', async () => {
+      const result = await api.runPaper(paperPayload());
+      setLatestPaper(result);
+      if (result.backtest) setLatest(result.backtest);
+      await loadSummaries();
     });
   }
 
@@ -741,9 +873,23 @@ function AutomationView() {
     });
   }
 
+  function selectSyncInstrument(key: string) {
+    const item = historicalInstruments.find((candidate) => instrumentKey(candidate.exchange, candidate.tradingsymbol, candidate.instrument_token) === key);
+    if (!item) return;
+    useHistoricalInstrument(item);
+  }
+
   function openBacktest(id: string) {
     return runAutomation('Loaded backtest', async () => {
       setLatest(await api.backtest(id));
+    });
+  }
+
+  function openPaperRun(id: string) {
+    return runAutomation('Loaded paper check', async () => {
+      const result = await api.paperRun(id);
+      setLatestPaper(result);
+      if (result.backtest) setLatest(result.backtest);
     });
   }
 
@@ -756,22 +902,39 @@ function AutomationView() {
           <PanelTitle icon={<Crosshair />} title="Instrument Token Lookup" />
           <FormShell onSubmit={searchHistoricalInstruments}>
             <div className="form-grid two">
-              <Select label="Exchange" value={instrumentSearch.exchange} options={['NFO', 'BFO', 'MCX']} onChange={(exchange) => setInstrumentSearch({ ...instrumentSearch, exchange })} />
-              <Input label="Underlying" value={instrumentSearch.underlying} onChange={(underlying) => setInstrumentSearch({ ...instrumentSearch, underlying: underlying.toUpperCase() })} />
+              <Select label="Exchange" value={instrumentSearch.exchange} options={exchangeOptions} onChange={changeInstrumentExchange} />
+              <Input label="Underlying Search" value={underlyingQuery} onChange={changeUnderlyingQuery} />
+              <div className="selected-box compact">
+                <span>Selected Underlying</span>
+                <strong>{instrumentSearch.underlying || 'None'}</strong>
+              </div>
               <Input label="Expiry" value={instrumentSearch.expiry} onChange={(expiry) => setInstrumentSearch({ ...instrumentSearch, expiry })} />
-              <Select label="Type" value={instrumentSearch.instrument_type} options={['', 'FUT', 'CE', 'PE']} onChange={(instrument_type) => setInstrumentSearch({ ...instrumentSearch, instrument_type })} />
+              <Select label="Type" value={instrumentSearch.instrument_type} options={['', 'FUT', 'CE', 'PE', 'EQ']} onChange={(instrument_type) => setInstrumentSearch({ ...instrumentSearch, instrument_type })} />
               <Input label="Symbol Contains" value={instrumentSearch.tradingsymbol} onChange={(tradingsymbol) => setInstrumentSearch({ ...instrumentSearch, tradingsymbol: tradingsymbol.toUpperCase() })} />
               <Input label="Limit" type="number" min={1} step={1} value={instrumentSearch.limit} onChange={(value) => setInstrumentSearch({ ...instrumentSearch, limit: Number(value) })} />
             </div>
-            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Searched instruments' ? <Loader2 className="spin" /> : <Crosshair />} Search Cached Instruments</button>
+            <div className="action-row">
+              <button type="button" className="icon-text-button" onClick={() => void searchUnderlyingOptions()} disabled={!!busy || underlyingBusy || !selectedExchangeCached}>
+                {underlyingBusy ? <Loader2 className="spin" /> : <Crosshair />} Find Underlyings
+              </button>
+              {instrumentSearch.underlying && <button type="button" className="text-button" onClick={() => setInstrumentSearch({ ...instrumentSearch, underlying: '' })}>Clear underlying</button>}
+            </div>
+            {historicalUnderlyings.length > 0 && <UnderlyingResultList items={historicalUnderlyings} onSelect={selectUnderlying} />}
+            {!selectedExchangeCached && (
+              <div className="inline-alert">
+                <span>No local instrument cache for {instrumentSearch.exchange}</span>
+                <button type="button" className="text-button" onClick={() => void syncSelectedExchange()} disabled={!!busy}>{busy === `Synced ${instrumentSearch.exchange} instruments` ? 'Syncing...' : `Sync ${instrumentSearch.exchange}`}</button>
+              </div>
+            )}
+            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy || !selectedExchangeCached}>{busy === 'Searched instruments' ? <Loader2 className="spin" /> : <Crosshair />} Search Instruments</button>
           </FormShell>
         </div>
         <div className="panel">
           <PanelTitle icon={<RefreshCw />} title="Historical Sync" />
           <FormShell onSubmit={submitSync}>
             <div className="form-grid two">
-              <Input label="Exchange" value={syncForm.exchange} onChange={(value) => setSyncForm({ ...syncForm, exchange: value.toUpperCase() })} />
-              <Input label="Symbol" value={syncForm.tradingsymbol} onChange={(value) => setSyncForm({ ...syncForm, tradingsymbol: value.toUpperCase() })} />
+              <Select label="Exchange" value={syncForm.exchange} options={exchangeOptions} onChange={(exchange) => setSyncForm({ ...syncForm, exchange, tradingsymbol: '', instrument_token: 0 })} />
+              <Select label="Instrument" value={syncInstrumentValid ? syncInstrumentKey : ''} options={syncInstrumentOptions} onChange={selectSyncInstrument} />
               <Input label="Instrument Token" type="number" min={1} step={1} value={syncForm.instrument_token} onChange={(value) => setSyncForm({ ...syncForm, instrument_token: Number(value) })} />
               <Select label="Interval" value={syncForm.interval} options={historicalIntervals()} onChange={(interval) => setSyncForm({ ...syncForm, interval })} />
               <Input label="From" type="datetime-local" value={syncForm.from} onChange={(from) => setSyncForm({ ...syncForm, from })} />
@@ -781,7 +944,7 @@ function AutomationView() {
               <input type="checkbox" checked={syncForm.include_oi} onChange={(event) => setSyncForm({ ...syncForm, include_oi: event.target.checked })} />
               <span>Include OI</span>
             </label>
-            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Synced historical candles' ? <Loader2 className="spin" /> : <RefreshCw />} Sync Candles</button>
+            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy || !syncInstrumentValid}>{busy === 'Synced historical candles' ? <Loader2 className="spin" /> : <RefreshCw />} Sync Candles</button>
           </FormShell>
         </div>
         <div className="panel">
@@ -808,6 +971,29 @@ function AutomationView() {
             <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Ran backtest' ? <Loader2 className="spin" /> : <BarChart3 />} Run Backtest</button>
           </FormShell>
         </div>
+        <div className="panel">
+          <PanelTitle icon={<Shield />} title="Paper Guardrails" />
+          <FormShell onSubmit={submitPaperRun}>
+            <div className="form-grid two">
+              <Input label="Max Trades/Day" type="number" min={0} step={1} value={guardrailForm.max_trades_per_day} onChange={(value) => setGuardrailForm({ ...guardrailForm, max_trades_per_day: Number(value) })} />
+              <Input label="Max Daily Loss" type="number" min={0} step="1" value={guardrailForm.max_daily_loss} onChange={(value) => setGuardrailForm({ ...guardrailForm, max_daily_loss: Number(value) })} />
+              <Input label="No Entry After" type="time" value={guardrailForm.no_entry_after} onChange={(value) => setGuardrailForm({ ...guardrailForm, no_entry_after: value })} />
+            </div>
+            <label className="check-row">
+              <input type="checkbox" checked={guardrailForm.mandatory_protection} onChange={(event) => setGuardrailForm({ ...guardrailForm, mandatory_protection: event.target.checked })} />
+              <span>Require SL and target</span>
+            </label>
+            <label className="check-row">
+              <input type="checkbox" checked={guardrailForm.kill_switch} onChange={(event) => setGuardrailForm({ ...guardrailForm, kill_switch: event.target.checked })} />
+              <span>Kill switch active</span>
+            </label>
+            <label className="check-row">
+              <input type="checkbox" checked={guardrailForm.manual_override} onChange={(event) => setGuardrailForm({ ...guardrailForm, manual_override: event.target.checked })} />
+              <span>Manual override</span>
+            </label>
+            <button className="icon-text-button primary form-submit" type="submit" disabled={!!busy}>{busy === 'Ran paper check' ? <Loader2 className="spin" /> : <Shield />} Run Paper Check</button>
+          </FormShell>
+        </div>
       </section>
       {historicalInstruments.length > 0 && (
         <section className="table-section">
@@ -816,10 +1002,16 @@ function AutomationView() {
         </section>
       )}
       {latest && <BacktestResultPanel result={latest} />}
+      {latestPaper && <PaperRunPanel result={latestPaper} />}
       <section className="table-section">
         <PanelTitle icon={<ListChecks />} title="Saved Backtests" action={<button className="text-button" onClick={() => void loadSummaries()}>Refresh</button>} />
         <BacktestSummaryTable summaries={summaries} onOpen={(id) => void openBacktest(id)} />
         {summaries.length === 0 && <EmptyState label="No backtests yet" />}
+      </section>
+      <section className="table-section">
+        <PanelTitle icon={<Shield />} title="Saved Paper Checks" action={<button className="text-button" onClick={() => void loadSummaries()}>Refresh</button>} />
+        <PaperRunSummaryTable summaries={paperSummaries} onOpen={(id) => void openPaperRun(id)} />
+        {paperSummaries.length === 0 && <EmptyState label="No paper checks yet" />}
       </section>
       {candles.length > 0 && (
         <section className="table-section">
@@ -898,6 +1090,92 @@ function BacktestSummaryTable(props: { summaries: BacktestSummary[]; onOpen: (id
   );
 }
 
+function PaperRunPanel(props: { result: PaperRunResult }) {
+  const violations = props.result.violations ?? [];
+  return (
+    <section className="table-section">
+      <PanelTitle icon={<Shield />} title="Latest Paper Check" />
+      <DetailGrid rows={[
+        ['ID', <span className="mono">{props.result.id}</span>],
+        ['Status', <StatusPill value={props.result.status} />],
+        ['Reason', props.result.reason || '-'],
+        ['Symbol', `${props.result.request.exchange}:${props.result.request.tradingsymbol}`],
+        ['Trades', props.result.backtest?.trades.length ?? 0],
+        ['Net P&L', <PnLValue value={props.result.backtest?.total_pnl ?? 0} />],
+        ['Violations', violations.length],
+      ]} />
+      {violations.length > 0 && <GuardrailViolationTable violations={violations} />}
+    </section>
+  );
+}
+
+function PaperRunSummaryTable(props: { summaries: PaperRunSummary[]; onOpen: (id: string) => void }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Status</th>
+            <th>Symbol</th>
+            <th>Strategy</th>
+            <th>Trades</th>
+            <th>Net P&L</th>
+            <th>Violations</th>
+            <th>Generated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.summaries.map((item) => (
+            <tr key={item.id}>
+              <td className="mono">{item.id}</td>
+              <td><StatusPill value={item.status} /></td>
+              <td>{item.exchange}:{item.tradingsymbol}</td>
+              <td>{item.strategy}</td>
+              <td>{item.trades}</td>
+              <td><PnLValue value={item.total_pnl} /></td>
+              <td>{item.violations}</td>
+              <td>{formatDateTime(item.generated_at)}</td>
+              <td><button className="text-button" onClick={() => props.onOpen(item.id)}>Open</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function GuardrailViolationTable(props: { violations: PaperRunResult['violations'] }) {
+  const violations = props.violations ?? [];
+  return (
+    <div className="table-wrap compact-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Message</th>
+            <th>Day</th>
+            <th>Value</th>
+            <th>Limit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {violations.map((item, index) => (
+            <tr key={`${item.code}-${index}`}>
+              <td className="mono">{item.code}</td>
+              <td>{item.message}</td>
+              <td>{item.day || '-'}</td>
+              <td>{item.value ?? '-'}</td>
+              <td>{item.limit ?? '-'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function BacktestTradeTable(props: { trades: BacktestResult['trades'] }) {
   return (
     <div className="table-wrap">
@@ -951,6 +1229,7 @@ function HistoricalInstrumentTable(props: { instruments: HistoricalInstrument[];
             <th>Strike</th>
             <th>Lot</th>
             <th>Tick</th>
+            <th>Seen</th>
             <th></th>
           </tr>
         </thead>
@@ -965,11 +1244,25 @@ function HistoricalInstrumentTable(props: { instruments: HistoricalInstrument[];
               <td>{item.strike ? money(item.strike) : '-'}</td>
               <td>{item.lot_size || '-'}</td>
               <td>{item.tick_size || '-'}</td>
+              <td>{item.first_seen && item.last_seen ? `${item.first_seen} to ${item.last_seen}` : '-'}</td>
               <td><button className="text-button" onClick={() => props.onUse(item)}>Use</button></td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function UnderlyingResultList(props: { items: HistoricalUnderlying[]; onSelect: (item: HistoricalUnderlying) => void }) {
+  return (
+    <div className="lookup-results">
+      {props.items.map((item) => (
+        <button type="button" key={`${item.exchange}-${item.underlying}`} onClick={() => props.onSelect(item)}>
+          <span>{item.underlying}</span>
+          <small>{item.instrument_types.join('/')} · {item.count}</small>
+        </button>
+      ))}
     </div>
   );
 }
@@ -2124,6 +2417,47 @@ function titleFor(view: View) {
 
 function historicalIntervals() {
   return ['minute', '3minute', '5minute', '10minute', '15minute', '30minute', '60minute', 'day'];
+}
+
+function automationExchangeOptions(statuses: InstrumentCacheStatus[]): SelectOption[] {
+  return ['NFO', 'BFO', 'MCX', 'NSE', 'BSE'].map((exchange) => {
+    const status = statuses.find((item) => item.exchange === exchange);
+    const ready = !!status?.cached || !!status?.registry_count;
+    const group = exchange === 'NSE' || exchange === 'BSE' ? 'Equity' : 'Derivatives';
+    return {
+      value: exchange,
+      label: `${group} · ${exchange} · ${ready ? 'synced' : 'not synced'}`,
+    };
+  });
+}
+
+function defaultHistoricalType(exchange: string) {
+  switch (exchange) {
+    case 'MCX':
+      return 'FUT';
+    case 'NSE':
+    case 'BSE':
+      return 'EQ';
+    default:
+      return '';
+  }
+}
+
+function shouldLoadHistoricalUnderlyings(exchange: string, query: string) {
+  const trimmed = query.trim();
+  if (exchange === 'NSE' || exchange === 'BSE') return trimmed.length >= 2;
+  return true;
+}
+
+function underlyingPlaceholder(exchange: string, query: string, cached: boolean) {
+  if (!cached) return 'Sync exchange first';
+  if (!shouldLoadHistoricalUnderlyings(exchange, query)) return 'Type 2+ letters';
+  return 'All underlyings';
+}
+
+function instrumentKey(exchange: string, tradingsymbol: string, instrumentToken: number) {
+  if (!exchange || !tradingsymbol || !instrumentToken) return '';
+  return `${exchange.toUpperCase()}|${tradingsymbol.toUpperCase()}|${instrumentToken}`;
 }
 
 function optionLabel(contract: OptionContract) {

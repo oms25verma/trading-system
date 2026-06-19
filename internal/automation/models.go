@@ -110,3 +110,48 @@ type BacktestSummary struct {
 	Expectancy  float64   `json:"expectancy"`
 	GeneratedAt time.Time `json:"generated_at"`
 }
+
+type Guardrails struct {
+	MandatoryProtection bool    `json:"mandatory_protection"`
+	MaxTradesPerDay     int     `json:"max_trades_per_day,omitempty"`
+	MaxDailyLoss        float64 `json:"max_daily_loss,omitempty"`
+	NoEntryAfter        string  `json:"no_entry_after,omitempty"`
+	KillSwitch          bool    `json:"kill_switch"`
+	ManualOverride      bool    `json:"manual_override"`
+}
+
+type PaperRunRequest struct {
+	BacktestRequest
+	Guardrails Guardrails `json:"guardrails"`
+}
+
+type GuardrailViolation struct {
+	Code    string  `json:"code"`
+	Message string  `json:"message"`
+	Day     string  `json:"day,omitempty"`
+	Value   float64 `json:"value,omitempty"`
+	Limit   float64 `json:"limit,omitempty"`
+}
+
+type PaperRunResult struct {
+	ID          string               `json:"id"`
+	Status      string               `json:"status"`
+	Reason      string               `json:"reason,omitempty"`
+	Request     PaperRunRequest      `json:"request"`
+	Backtest    *BacktestResult      `json:"backtest,omitempty"`
+	Violations  []GuardrailViolation `json:"violations,omitempty"`
+	GeneratedAt time.Time            `json:"generated_at"`
+}
+
+type PaperRunSummary struct {
+	ID          string    `json:"id"`
+	Status      string    `json:"status"`
+	Strategy    string    `json:"strategy"`
+	Exchange    string    `json:"exchange"`
+	Symbol      string    `json:"tradingsymbol"`
+	Interval    string    `json:"interval"`
+	Trades      int       `json:"trades"`
+	TotalPnL    float64   `json:"total_pnl"`
+	Violations  int       `json:"violations"`
+	GeneratedAt time.Time `json:"generated_at"`
+}

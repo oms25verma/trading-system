@@ -30,11 +30,13 @@ type Service struct {
 }
 
 type SyncResult struct {
-	Exchange  string    `json:"exchange"`
-	Count     int       `json:"count"`
-	Path      string    `json:"path"`
-	SyncedAt  time.Time `json:"synced_at"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	Exchange      string    `json:"exchange"`
+	Count         int       `json:"count"`
+	Path          string    `json:"path"`
+	RegistryPath  string    `json:"registry_path,omitempty"`
+	RegistryCount int       `json:"registry_count,omitempty"`
+	SyncedAt      time.Time `json:"synced_at"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 }
 
 type OptionContract struct {
@@ -69,6 +71,22 @@ type FutureContractsResponse struct {
 	Contracts  []FutureContract `json:"contracts"`
 }
 
+type CacheStatus struct {
+	Exchange      string    `json:"exchange"`
+	Cached        bool      `json:"cached"`
+	Path          string    `json:"path,omitempty"`
+	Count         int       `json:"count,omitempty"`
+	SyncedAt      time.Time `json:"synced_at,omitempty"`
+	RegistryCount int       `json:"registry_count,omitempty"`
+}
+
+type HistoricalUnderlying struct {
+	Exchange        string   `json:"exchange"`
+	Underlying      string   `json:"underlying"`
+	InstrumentTypes []string `json:"instrument_types"`
+	Count           int      `json:"count"`
+}
+
 type HistoricalInstrument struct {
 	InstrumentToken uint32  `json:"instrument_token"`
 	Exchange        string  `json:"exchange"`
@@ -80,6 +98,8 @@ type HistoricalInstrument struct {
 	Segment         string  `json:"segment"`
 	LotSize         int     `json:"lot_size"`
 	TickSize        float64 `json:"tick_size"`
+	FirstSeen       string  `json:"first_seen,omitempty"`
+	LastSeen        string  `json:"last_seen,omitempty"`
 }
 
 type HistoricalInstrumentFilter struct {
@@ -89,6 +109,12 @@ type HistoricalInstrumentFilter struct {
 	InstrumentType string
 	TradingSymbol  string
 	Limit          int
+}
+
+type HistoricalUnderlyingFilter struct {
+	Exchange string
+	Query    string
+	Limit    int
 }
 
 type OptionContractsResponse struct {
@@ -126,12 +152,121 @@ func (s *Service) Sync(ctx context.Context, exchange string) (*SyncResult, error
 	if err := os.WriteFile(path, payload, 0o644); err != nil {
 		return nil, err
 	}
+	registryPath, registryCount, err := s.upsertRegistry(exchange, items, s.now())
+	if err != nil {
+		return nil, err
+	}
 	return &SyncResult{
-		Exchange: exchange,
-		Count:    len(items),
-		Path:     path,
-		SyncedAt: s.now().UTC(),
+		Exchange:      exchange,
+		Count:         len(items),
+		Path:          path,
+		RegistryPath:  registryPath,
+		RegistryCount: registryCount,
+		SyncedAt:      s.now().UTC(),
 	}, nil
+}
+
+func (s *Service) CacheStatuses(exchanges []string) ([]CacheStatus, error) {
+	if len(exchanges) == 0 {
+		exchanges = []string{"NFO", "BFO", "MCX", "NSE", "BSE"}
+	}
+	registry, registryErr := s.loadRegistry()
+	out := make([]CacheStatus, 0, len(exchanges))
+	for _, exchange := range exchanges {
+		exchange = normalizeExchange(exchange)
+		status := CacheStatus{Exchange: exchange}
+		path, err := s.latestCachePath(exchange)
+		if err == nil {
+			status.Cached = true
+			status.Path = path
+			if info, statErr := os.Stat(path); statErr == nil {
+				status.SyncedAt = info.ModTime().UTC()
+			}
+			if items, loadErr := s.load(exchange); loadErr == nil {
+				status.Count = len(items)
+			}
+		} else if !errors.Is(err, ErrInstrumentCacheMissing) {
+			return nil, err
+		}
+		if registryErr == nil {
+			for _, item := range registry {
+				if strings.EqualFold(item.Exchange, exchange) {
+					status.RegistryCount++
+				}
+			}
+		} else if !os.IsNotExist(registryErr) {
+			return nil, registryErr
+		}
+		out = append(out, status)
+	}
+	return out, nil
+}
+
+func (s *Service) HistoricalUnderlyings(filter HistoricalUnderlyingFilter) ([]HistoricalUnderlying, error) {
+	filter.Exchange = normalizeExchange(filter.Exchange)
+	filter.Query = strings.ToUpper(strings.TrimSpace(filter.Query))
+	if filter.Limit <= 0 || filter.Limit > 200 {
+		filter.Limit = 50
+	}
+	items, err := s.registryOrLatest(filter.Exchange)
+	if err != nil {
+		return nil, err
+	}
+	type aggregate struct {
+		types map[string]bool
+		count int
+	}
+	seen := map[string]*aggregate{}
+	for _, item := range items {
+		if !strings.EqualFold(item.Exchange, filter.Exchange) {
+			continue
+		}
+		underlying := strings.ToUpper(strings.TrimSpace(item.Underlying))
+		if underlying == "" {
+			underlying = strings.ToUpper(strings.TrimSpace(item.TradingSymbol))
+		}
+		if underlying == "" {
+			continue
+		}
+		if filter.Query != "" && !strings.Contains(underlying, filter.Query) {
+			continue
+		}
+		if seen[underlying] == nil {
+			seen[underlying] = &aggregate{types: map[string]bool{}}
+		}
+		seen[underlying].types[item.InstrumentType] = true
+		seen[underlying].count++
+	}
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if filter.Query != "" {
+			leftPrefix := strings.HasPrefix(keys[i], filter.Query)
+			rightPrefix := strings.HasPrefix(keys[j], filter.Query)
+			if leftPrefix != rightPrefix {
+				return leftPrefix
+			}
+		}
+		if seen[keys[i]].count != seen[keys[j]].count {
+			return seen[keys[i]].count > seen[keys[j]].count
+		}
+		return keys[i] < keys[j]
+	})
+	if len(keys) > filter.Limit {
+		keys = keys[:filter.Limit]
+	}
+	out := make([]HistoricalUnderlying, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, HistoricalUnderlying{
+			Exchange:        filter.Exchange,
+			Underlying:      key,
+			InstrumentTypes: sortedKeys(seen[key].types),
+			Count:           seen[key].count,
+		})
+	}
+	return out, nil
 }
 
 func (s *Service) Underlyings(exchange string) ([]string, error) {
@@ -242,10 +377,86 @@ func (s *Service) HistoricalInstruments(filter HistoricalInstrumentFilter) ([]Hi
 	if filter.Limit <= 0 || filter.Limit > 500 {
 		filter.Limit = 100
 	}
-	items, err := s.load(filter.Exchange)
+	items, err := s.registryMergedWithLatest(filter.Exchange)
 	if err != nil {
 		return nil, err
 	}
+	return filterHistoricalInstruments(items, filter), nil
+}
+
+func (s *Service) ValidateHistoricalInstrument(exchange, tradingSymbol string, instrumentToken int64) error {
+	exchange = normalizeExchange(exchange)
+	tradingSymbol = strings.ToUpper(strings.TrimSpace(tradingSymbol))
+	if tradingSymbol == "" {
+		return fmt.Errorf("tradingsymbol is required")
+	}
+	if instrumentToken <= 0 {
+		return fmt.Errorf("instrument_token is required")
+	}
+	items, err := s.registryOrLatest(exchange)
+	if err != nil {
+		return err
+	}
+	var symbolMatch *HistoricalInstrument
+	var tokenMatch *HistoricalInstrument
+	for i := range items {
+		item := &items[i]
+		if !strings.EqualFold(item.Exchange, exchange) {
+			continue
+		}
+		if item.TradingSymbol == tradingSymbol && int64(item.InstrumentToken) == instrumentToken {
+			return nil
+		}
+		if item.TradingSymbol == tradingSymbol && symbolMatch == nil {
+			symbolMatch = item
+		}
+		if int64(item.InstrumentToken) == instrumentToken && tokenMatch == nil {
+			tokenMatch = item
+		}
+	}
+	if symbolMatch != nil {
+		return fmt.Errorf("instrument_token %d does not match %s:%s; expected token %d from instrument registry", instrumentToken, exchange, tradingSymbol, symbolMatch.InstrumentToken)
+	}
+	if tokenMatch != nil {
+		return fmt.Errorf("instrument_token %d belongs to %s:%s, not %s:%s", instrumentToken, tokenMatch.Exchange, tokenMatch.TradingSymbol, exchange, tradingSymbol)
+	}
+	return fmt.Errorf("instrument %s:%s token %d was not found in instrument registry; run POST /instruments/sync?exchange=%s and select the instrument from the lookup", exchange, tradingSymbol, instrumentToken, exchange)
+}
+
+func (s *Service) registryOrLatest(exchange string) ([]HistoricalInstrument, error) {
+	return s.registryMergedWithLatest(exchange)
+}
+
+func (s *Service) registryMergedWithLatest(exchange string) ([]HistoricalInstrument, error) {
+	exchange = normalizeExchange(exchange)
+	byKey := map[string]HistoricalInstrument{}
+	registry, err := s.loadRegistry()
+	if err == nil {
+		for _, item := range registry {
+			byKey[historicalInstrumentKey(item)] = item
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	cacheItems, cacheErr := s.load(exchange)
+	if cacheErr != nil {
+		if len(byKey) == 0 {
+			return nil, cacheErr
+		}
+	} else {
+		for _, item := range historicalInstrumentsFromKite(cacheItems, s.now()) {
+			byKey[historicalInstrumentKey(item)] = item
+		}
+	}
+	out := make([]HistoricalInstrument, 0, len(byKey))
+	for _, item := range byKey {
+		out = append(out, item)
+	}
+	sortHistoricalInstruments(out)
+	return out, nil
+}
+
+func filterHistoricalInstruments(items []HistoricalInstrument, filter HistoricalInstrumentFilter) []HistoricalInstrument {
 	out := make([]HistoricalInstrument, 0)
 	for _, item := range items {
 		if filter.TradingSymbol != "" && !strings.Contains(item.TradingSymbol, filter.TradingSymbol) {
@@ -257,44 +468,19 @@ func (s *Service) HistoricalInstruments(filter HistoricalInstrumentFilter) ([]Hi
 		if filter.Expiry != "" && item.Expiry != filter.Expiry {
 			continue
 		}
-		underlying := historicalUnderlyingName(item)
-		if filter.Underlying != "" && !strings.EqualFold(underlying, filter.Underlying) && !strings.HasPrefix(item.TradingSymbol, filter.Underlying) {
+		if filter.Exchange != "" && !strings.EqualFold(item.Exchange, filter.Exchange) {
 			continue
 		}
-		out = append(out, HistoricalInstrument{
-			InstrumentToken: item.InstrumentToken,
-			Exchange:        item.Exchange,
-			TradingSymbol:   item.TradingSymbol,
-			Underlying:      underlying,
-			Expiry:          item.Expiry,
-			Strike:          item.Strike,
-			InstrumentType:  item.InstrumentType,
-			Segment:         item.Segment,
-			LotSize:         item.LotSize,
-			TickSize:        item.TickSize,
-		})
-		if len(out) >= filter.Limit {
-			break
+		if filter.Underlying != "" && !strings.EqualFold(item.Underlying, filter.Underlying) && !strings.HasPrefix(item.TradingSymbol, filter.Underlying) {
+			continue
 		}
+		out = append(out, item)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Expiry != out[j].Expiry {
-			left, leftOK := parseDate(out[i].Expiry)
-			right, rightOK := parseDate(out[j].Expiry)
-			if leftOK && rightOK {
-				return left.Before(right)
-			}
-			return out[i].Expiry < out[j].Expiry
-		}
-		if out[i].Underlying != out[j].Underlying {
-			return out[i].Underlying < out[j].Underlying
-		}
-		if out[i].Strike != out[j].Strike {
-			return out[i].Strike < out[j].Strike
-		}
-		return out[i].TradingSymbol < out[j].TradingSymbol
-	})
-	return out, nil
+	sortHistoricalInstruments(out)
+	if len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out
 }
 
 type OptionFilter struct {

@@ -23,6 +23,12 @@ type BacktestStore interface {
 	Get(id string) (*BacktestResult, error)
 }
 
+type PaperRunStore interface {
+	Save(result *PaperRunResult) (string, error)
+	List() ([]PaperRunSummary, error)
+	Get(id string) (*PaperRunResult, error)
+}
+
 type CandleListRequest struct {
 	Exchange      string
 	TradingSymbol string
@@ -39,6 +45,10 @@ type JSONBacktestStore struct {
 	baseDir string
 }
 
+type JSONPaperRunStore struct {
+	baseDir string
+}
+
 func NewJSONCandleStore(baseDir string) *JSONCandleStore {
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = "data"
@@ -51,6 +61,13 @@ func NewJSONBacktestStore(baseDir string) *JSONBacktestStore {
 		baseDir = "data"
 	}
 	return &JSONBacktestStore{baseDir: baseDir}
+}
+
+func NewJSONPaperRunStore(baseDir string) *JSONPaperRunStore {
+	if strings.TrimSpace(baseDir) == "" {
+		baseDir = "data"
+	}
+	return &JSONPaperRunStore{baseDir: baseDir}
 }
 
 func (s *JSONCandleStore) Save(req HistoricalRequest, candles []Candle) ([]string, int, error) {
@@ -208,6 +225,68 @@ func (s *JSONBacktestStore) loadResult(path string) (*BacktestResult, error) {
 		return nil, err
 	}
 	var result BacktestResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (s *JSONPaperRunStore) Save(result *PaperRunResult) (string, error) {
+	if result == nil {
+		return "", fmt.Errorf("paper run result is required")
+	}
+	if result.ID == "" {
+		result.ID = paperRunID(result)
+	}
+	dir := filepath.Join(s.baseDir, "paper_runs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, safePart(result.ID)+".json")
+	payload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	payload = append(payload, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+		return "", err
+	}
+	return path, os.Rename(tmp, path)
+}
+
+func (s *JSONPaperRunStore) List() ([]PaperRunSummary, error) {
+	pattern := filepath.Join(s.baseDir, "paper_runs", "*.json")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PaperRunSummary, 0, len(matches))
+	for _, match := range matches {
+		result, err := s.loadResult(match)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, summarizePaperRun(result))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].GeneratedAt.After(out[j].GeneratedAt) })
+	return out, nil
+}
+
+func (s *JSONPaperRunStore) Get(id string) (*PaperRunResult, error) {
+	id = safePart(id)
+	if id == "" || id == "UNKNOWN" {
+		return nil, fmt.Errorf("paper run id is required")
+	}
+	return s.loadResult(filepath.Join(s.baseDir, "paper_runs", id+".json"))
+}
+
+func (s *JSONPaperRunStore) loadResult(path string) (*PaperRunResult, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var result PaperRunResult
 	if err := json.Unmarshal(payload, &result); err != nil {
 		return nil, err
 	}

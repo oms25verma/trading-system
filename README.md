@@ -250,7 +250,7 @@ Search the latest cached Kite instrument master for a token before syncing:
 curl "http://127.0.0.1:8080/historical/instruments?exchange=MCX&underlying=SILVERM&instrument_type=FUT&limit=25"
 ```
 
-This search works from files created by `POST /instruments/sync?exchange=<EXCHANGE>`. It is good for current cached contracts. A durable token registry for expired F&O contracts is still a later database-backed task.
+This search reads `data/instrument_registry.json`, which is updated on every `POST /instruments/sync?exchange=<EXCHANGE>`. That means a contract token remains searchable after a later sync no longer contains the expired contract. The registry is still JSON-backed for now and can move to the future database persistence layer.
 
 Read stored candles:
 
@@ -285,13 +285,52 @@ curl -X POST http://127.0.0.1:8080/backtests \
 
 Backtest P&L uses `price_diff * quantity * multiplier`, then subtracts `brokerage_per_trade` from each completed trade. `slippage_points` worsens both entry and exit prices. Backtest results include gross P&L, total costs, net P&L, max drawdown, win rate, expectancy, average win/loss, and an equity curve. Results are stored under `data/backtests/`. Use `GET /backtests` to list summaries and `GET /backtests/<id>` for the full trade list.
 
+Run a paper strategy check with guardrails. This uses stored candles and records whether the strategy would be ready, blocked before evaluation, or in violation after simulated trades. It does not place broker orders.
+
+```bash
+curl -X POST http://127.0.0.1:8080/paper-runs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "exchange": "MCX",
+    "tradingsymbol": "SILVERM26JUNFUT",
+    "interval": "minute",
+    "from": "2026-06-01T09:00:00+05:30",
+    "to": "2026-06-30T23:30:00+05:30",
+    "strategy": "opening_range_breakout",
+    "quantity": 1,
+    "multiplier": 5,
+    "stop_loss_points": 500,
+    "target_points": 1000,
+    "slippage_points": 0.5,
+    "brokerage_per_trade": 40,
+    "range_start": "09:15",
+    "range_end": "09:30",
+    "exit_time": "15:20",
+    "guardrails": {
+      "mandatory_protection": true,
+      "max_trades_per_day": 3,
+      "max_daily_loss": 5000,
+      "no_entry_after": "14:45",
+      "kill_switch": false,
+      "manual_override": false
+    }
+  }'
+```
+
+Paper run results are stored under `data/paper_runs/`. Use `GET /paper-runs` to list summaries and `GET /paper-runs/<id>` for the full guardrail report.
+
 The frontend has an `Automation` page for the same flow:
 
 - sync historical candles
 - search cached instruments and apply the token to sync/backtest forms
+- require historical candle sync to use a selected registry/cache instrument so exchange, symbol, and token stay consistent
+- show instrument cache readiness by exchange and offer inline sync before search
+- use a filtered underlying lookup from the local registry/cache to reduce symbol-entry mistakes without rendering huge equity lists
 - run the opening-range breakout backtest
 - view saved backtest summaries
 - inspect the latest backtest trades, costs, expectancy, and equity curve
+- run paper strategy checks with guardrails before any live automation is considered
+- view saved paper check summaries and guardrail violations
 
 Kite MCP can be useful later as an AI assistant layer for portfolio/market analysis and strategy exploration. Zerodha's MCP article says MCP currently focuses on market data and portfolio analysis; order placement, historical trade data, portfolio data, and some other features are unavailable at this time. For this app, Kite Connect remains the execution and persistent-system integration path, while MCP is a possible future assistant interface over our own backend.
 
@@ -304,6 +343,7 @@ data/trades_24_05_2026.json
 data/orders_24_05_2026.json
 data/positions_24_05_2026.json
 data/instruments_NFO_12_06_2026.json
+data/instrument_registry.json
 ```
 
 Override storage with:

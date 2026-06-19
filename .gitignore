@@ -1,6 +1,9 @@
 data/*.json
 data/*.json.tmp
 data/*.log
+data/historical/
+data/backtests/
+data/paper_runs/
 todo.md
 web/node_modules/
 web/dist/
